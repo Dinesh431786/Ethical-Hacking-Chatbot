@@ -6,11 +6,17 @@ import os
 import google.generativeai as genai
 from datetime import datetime
 
-# Branding/Header
-st.set_page_config(page_title="Voxelta Security Toolkit", page_icon="🛡️", layout="centered")
+# -- Branding/Header --
+st.set_page_config(page_title="Voxelta Security Toolkit", page_icon="🛡️", layout="wide")
 st.markdown("""
+<style>
+.card {background: #f7fafd; border-radius: 12px; box-shadow: 0 2px 14px #d2e5fa44; padding: 1.5em 2em; margin-bottom: 2em;}
+.ai-explain {background: #eefbe9; border-radius: 10px; margin-top: 1.2em; padding: 1.1em 1.5em; font-size: 1.08em;}
+.bigout {font-size: 1.15em; background: #f5f8ff; border-radius: 9px; padding: 1.1em 1.5em; margin: 1.2em 0 0.8em 0;}
+h2, h3 {margin-top: 0;}
+</style>
 <div style="background: linear-gradient(90deg,#1e3c72 0%,#2a5298 100%);
-padding:1.2rem 2rem 1.1rem 2rem; border-radius:13px; margin-bottom:1.2rem;">
+padding:1.2rem 2rem 1.1rem 2rem; border-radius:13px; margin-bottom:1.4rem;">
   <h2 style="color:#fff;margin-bottom:0;">🛡️ Voxelta Security Toolkit</h2>
   <div style="color:#ffe057;">For Ethical Hackers & Researchers |
     <a style="color:#ffe057;" href="https://www.linkedin.com/in/dinesh-k-3199ab1b0/" target="_blank">Dinesh K</a>
@@ -18,7 +24,7 @@ padding:1.2rem 2rem 1.1rem 2rem; border-radius:13px; margin-bottom:1.2rem;">
 </div>
 """, unsafe_allow_html=True)
 
-# Gemini Helper
+# -- Gemini Helper --
 class GeminiBot:
     def __init__(self):
         self.client = None
@@ -40,7 +46,7 @@ class GeminiBot:
 if "gemini" not in st.session_state: st.session_state["gemini"] = None
 if "gemini_init" not in st.session_state: st.session_state["gemini_init"] = False
 
-# Sidebar: Tool Selector & Gemini
+# -- Sidebar: Tool Selector & Gemini --
 with st.sidebar:
     st.header("⚙️ Tool & AI Setup")
     gkey = st.text_input("Gemini API Key", type="password")
@@ -58,8 +64,21 @@ with st.sidebar:
         "YARA Scanner": "🦠 YARA Scanner"
     }[x])
 
-# =========== NMAP PANEL ===========
+# -- Nmap Output Formatter (Table for Port/Stealth) --
+def pretty_nmap_csv(csv_str):
+    # Only show table for port/stealth, otherwise just plain
+    lines = [x for x in csv_str.splitlines() if x.strip()]
+    if len(lines) < 2 or lines[0].startswith("host;"):
+        return st.code(csv_str, language="text")
+    headers = lines[0].split(";")
+    st.markdown('<div class="bigout">', unsafe_allow_html=True)
+    st.write("**Scan Results:**")
+    st.table([dict(zip(headers, l.split(";"))) for l in lines[1:]])
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# -- Nmap PANEL --
 if tool == "Nmap Scanner":
+    st.markdown('<div class="card">', unsafe_allow_html=True)
     st.subheader("🛡️ Nmap Scanner")
     scan_types = {
         "Basic": "-sn",
@@ -71,28 +90,40 @@ if tool == "Nmap Scanner":
     ports = ""
     if scan in ["Port Scan", "Stealth"]:
         ports = st.text_input("Ports (comma-separated)", value="21,22,80,443", key="ports")
-    if st.button("Run Nmap Scan"):
+    run = st.button("Run Nmap Scan")
+    if run:
         if not target:
             st.error("Please enter a target!")
         else:
             args = scan_types[scan]
             if ports and scan in ["Port Scan", "Stealth"]:
                 args += f" -p {ports}"
-            st.info(f"Running: nmap {args} {target}")
+            st.info(f"Running: `nmap {args} {target}`")
             nm = nmap.PortScanner()
             try:
                 nm.scan(target, arguments=args)
                 result = nm.csv()
-                st.code(result or "No results.", language="text")
-                if st.session_state["gemini"] and st.toggle("Gemini AI Analysis", key="nmap_ai"):
-                    prompt = f"Explain this Nmap {scan} scan result for a cyber security expert."
-                    st.success(st.session_state["gemini"].analyze(result, prompt=prompt))
+                # Show as pretty table for port/stealth, code for basic
+                if scan == "Basic":
+                    st.markdown('<div class="bigout">', unsafe_allow_html=True)
+                    st.code(result or "No results.", language="text")
+                    st.markdown('</div>', unsafe_allow_html=True)
+                else:
+                    pretty_nmap_csv(result)
                 st.download_button("⬇️ Download Result (.txt)", result, file_name=f"nmap_{scan}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+                # Gemini Explain
+                if st.session_state["gemini"]:
+                    if st.button("💡 Gemini: Explain Result"):
+                        with st.spinner("Gemini is analyzing..."):
+                            explain = st.session_state["gemini"].analyze(result, prompt=f"Explain this Nmap {scan} scan output for a cyber security expert. Show port/service risks and recommendations.")
+                        st.markdown(f'<div class="ai-explain"><b>Gemini Explanation:</b><br>{explain}</div>', unsafe_allow_html=True)
             except Exception as e:
                 st.error(f"Nmap error: {e}")
+    st.markdown('</div>', unsafe_allow_html=True)
 
-# =========== YARA PANEL ===========
+# -- YARA PANEL --
 elif tool == "YARA Scanner":
+    st.markdown('<div class="card">', unsafe_allow_html=True)
     st.subheader("🦠 YARA Rule Builder & File Scanner")
     yara_templates = {
         "Suspicious String": '''rule suspicious_string_rule
@@ -134,13 +165,13 @@ elif tool == "YARA Scanner":
                 st.success("YARA rule compiled successfully")
             except Exception as e:
                 st.error(f"YARA syntax error: {str(e)}")
-        if st.button("💡 Explain with Gemini"):
-            if st.session_state["gemini"]:
-                st.markdown(st.session_state["gemini"].analyze(
-                    rule_content, "Explain this YARA rule for malware analysts."
-                ))
-            else:
-                st.warning("Configure Gemini API first.")
+        if st.session_state["gemini"]:
+            if st.button("💡 Gemini: Explain Rule"):
+                with st.spinner("Gemini is analyzing..."):
+                    explain = st.session_state["gemini"].analyze(
+                        rule_content, "Explain this YARA rule for malware analysts."
+                    )
+                st.markdown(f'<div class="ai-explain"><b>Gemini Explanation:</b><br>{explain}</div>', unsafe_allow_html=True)
     with col2:
         files = st.file_uploader(
             "Upload files to scan", type=['exe', 'dll', 'pdf', 'doc', 'txt'],
@@ -170,8 +201,9 @@ elif tool == "YARA Scanner":
                         st.error(f"Scan failed for `{uploaded_file.name}`: {str(e)}")
                     finally:
                         os.unlink(tmp_path)
+    st.markdown('</div>', unsafe_allow_html=True)
 
-# ============= FOOTER =============
+# -- Footer --
 st.markdown("""
     <hr style="margin-top:2.2em;margin-bottom:0;">
     <div style='text-align: center; color: #666; font-size: 1em;'>
