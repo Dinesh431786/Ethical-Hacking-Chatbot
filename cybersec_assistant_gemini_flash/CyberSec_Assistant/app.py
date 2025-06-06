@@ -32,6 +32,48 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+def clean_nmap_output(output):
+    """
+    Remove Nmap banner/footer and empty lines for cleaner display.
+    """
+    lines = output.split('\n')
+    filtered = []
+    skip_prefixes = [
+        'Starting Nmap', 'Nmap done:', 'Read data files from:',
+        'Initiating', 'Stats:', 'Warning:'
+    ]
+    for line in lines:
+        if any(line.strip().startswith(prefix) for prefix in skip_prefixes):
+            continue
+        if line.strip() == '':
+            continue
+        filtered.append(line)
+    return '\n'.join(filtered)
+
+def highlight_ports(output):
+    """
+    Highlight open ports in the Nmap output with emojis and Markdown.
+    """
+    port_section = []
+    in_ports = False
+    for line in output.splitlines():
+        if re.match(r"^PORT\s+STATE\s+SERVICE", line):
+            in_ports = True
+            port_section.append(f"**`{line}`**")
+            continue
+        if in_ports:
+            if not line.strip() or line.startswith("Service Info:"):
+                break
+            if "open" in line:
+                # Add green dot for open ports
+                port_section.append(f":green_circle: `{line}`")
+            elif "filtered" in line or "closed" in line:
+                # Optional: muted color for closed/filtered
+                port_section.append(f":red_circle: `{line}`")
+            else:
+                port_section.append(f"`{line}`")
+    return "\n".join(port_section) if port_section else ""
+
 class EthicalHackingBot:
     def __init__(self):
         self.genai_client = None
@@ -53,7 +95,7 @@ class EthicalHackingBot:
             if scan_type == "basic":
                 scan_command = ["nmap", "-sn", target]
             elif scan_type == "port_scan":
-                scan_command = ["nmap", "-sT", target]  # no custom ports, use nmap's defaults
+                scan_command = ["nmap", "-sT", target]  # default 1000 ports
             elif scan_type == "service_scan":
                 scan_command = ["nmap", "-sV", "-sC", target]
             else:
@@ -199,8 +241,25 @@ def main():
             else:
                 st.markdown(f"**Command:** `{result.get('command', 'N/A')}`")
                 if result.get('stdout'):
-                    st.markdown("**Output:**")
-                    st.code(result['stdout'], language='text')
+                    st.markdown("### :rocket: **Open Ports & Services**")
+                    clean_output = clean_nmap_output(result['stdout'])
+                    port_table = highlight_ports(clean_output)
+                    if port_table:
+                        st.markdown(port_table)
+                    # Show rest of the output (summary, host info, etc)
+                    other_output = []
+                    in_ports = False
+                    for line in clean_output.split('\n'):
+                        if re.match(r"^PORT\s+STATE\s+SERVICE", line):
+                            in_ports = True
+                            continue
+                        if in_ports:
+                            if not line.strip():
+                                in_ports = False
+                            continue
+                        other_output.append(line)
+                    if other_output:
+                        st.code('\n'.join(other_output), language='text')
                 if result.get('stderr'):
                     st.markdown("**Errors:**")
                     st.code(result['stderr'], language='text')
