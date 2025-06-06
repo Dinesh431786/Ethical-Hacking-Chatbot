@@ -60,7 +60,7 @@ def extract_port_table(output):
             continue
         if in_table:
             # Table ends on blank line or with summary line
-            if not line.strip() or re.match(r"^[A-Z]", line):  # Sometimes summary or next section starts with uppercase
+            if not line.strip() or re.match(r"^[A-Z]", line):
                 break
             port_lines.append(line)
     return port_lines
@@ -175,7 +175,6 @@ def advanced_nmap_output(stdout):
         except ValueError:
             extra_lines = []
 
-    # Group extra info per port
     ports = []
     port_details = {}
     current_port = None
@@ -186,7 +185,6 @@ def advanced_nmap_output(stdout):
             ports.append(port)
             port_details[port] = {"line": line, "details": []}
             current_port = port
-    # Attach lines from extra_lines to correct port
     for line in extra_lines:
         port_match = re.match(r"^(\d+/[a-z]+)", line)
         if port_match and port_match.group(1) in port_details:
@@ -194,8 +192,44 @@ def advanced_nmap_output(stdout):
             continue
         if current_port:
             port_details[current_port]["details"].append(line)
-
     return ports, port_details
+
+def show_advanced_scan_results(result, scan_type):
+    if result.get('stdout'):
+        # Basic scan = host up/down only
+        if scan_type == "basic":
+            clean_output = clean_nmap_output(result['stdout'])
+            if "Host is up" in clean_output:
+                st.success("🎯 Host is **up** and reachable!")
+            elif "Host seems down" in clean_output:
+                st.error("❌ Host is **down** or not reachable.")
+            else:
+                st.info(clean_output)
+            st.caption(f"Scan finished at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            return
+
+        # For port/service scans, try advanced grouping
+        ports, port_details = advanced_nmap_output(result['stdout'])
+        if ports:
+            st.markdown("### :rocket: **Advanced Port & Service Details**")
+            open_count = 0
+            for port in ports:
+                line = port_details[port]["line"]
+                is_open = "open" in line
+                icon = ":green_circle:" if is_open else (":red_circle:" if "closed" in line or "filtered" in line else ":white_circle:")
+                if is_open:
+                    open_count += 1
+                st.markdown(f"{icon} `{line}`")
+                details = port_details[port]["details"]
+                if details:
+                    with st.expander(f"Details for {port}", expanded=False):
+                        st.code("\n".join(details), language="text")
+            st.success(f"**{open_count} open ports found.**")
+        else:
+            # Fallback: show ALL output as is
+            st.markdown("#### Full Nmap Output")
+            st.code(result['stdout'], language='text')
+        st.caption(f"Scan finished at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 def main():
     st.markdown("""
@@ -232,6 +266,7 @@ def main():
             with st.spinner("Running scan..."):
                 result = st.session_state.bot.run_nmap_scan(target, scan_type)
                 st.session_state.last_scan = result
+                st.session_state['scan_type'] = scan_type
 
     tab1, tab2, tab3 = st.tabs(["💬 Chat Assistant", "🔍 Scan Results", "📝 YARA Rules"])
 
@@ -261,27 +296,12 @@ def main():
         st.header("Scan Results")
         if 'last_scan' in st.session_state:
             result = st.session_state.last_scan
+            scan_type = st.session_state.get('scan_type', 'service_scan')
             if 'error' in result:
                 st.error(f"Scan Error: {result['error']}")
             else:
                 st.markdown(f"**Scan Command:** `{result.get('command', 'N/A')}`")
-                if result.get('stdout'):
-                    ports, port_details = advanced_nmap_output(result['stdout'])
-                    st.markdown("### :rocket: **Advanced Port & Service Details**")
-                    open_count = 0
-                    for port in ports:
-                        line = port_details[port]["line"]
-                        is_open = "open" in line
-                        icon = ":green_circle:" if is_open else (":red_circle:" if "closed" in line or "filtered" in line else ":white_circle:")
-                        if is_open:
-                            open_count += 1
-                        st.markdown(f"{icon} `{line}`")
-                        details = port_details[port]["details"]
-                        if details:
-                            with st.expander(f"Details for {port}", expanded=False):
-                                st.code("\n".join(details), language="text")
-                    st.success(f"**{open_count} open ports found.**")
-                    st.caption(f"Scan finished at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                show_advanced_scan_results(result, scan_type)
                 if result.get('stderr'):
                     st.markdown("**Errors:**")
                     st.code(result['stderr'], language='text')
