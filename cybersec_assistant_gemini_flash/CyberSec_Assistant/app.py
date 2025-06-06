@@ -68,10 +68,10 @@ class EthicalHackingBot:
 
             scan_commands = {
                 "basic": ["nmap", "-sn", target],
-                "port_scan": ["nmap", "-sS", "-O", target],
+                "port_scan": ["nmap", "-sT", target],  # changed to -sT for non-root environments
                 "service_scan": ["nmap", "-sV", "-sC", target],
                 "vuln_scan": ["nmap", "--script", "vuln", target],
-                "stealth": ["nmap", "-sS", "-f", "-T2", target]
+                "stealth": ["nmap", "-sT", target],  # fallback to -sT; -sS requires root
             }
 
             if scan_type not in scan_commands:
@@ -98,15 +98,8 @@ class EthicalHackingBot:
 
     def create_yara_rule(self, rule_content):
         try:
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.yar', delete=False) as f:
-                f.write(rule_content)
-                rule_file = f.name
-
-            yara.compile(filepath=rule_file)
-            os.unlink(rule_file)
-
+            yara.compile(source=rule_content)
             return {"status": "success", "message": "YARA rule compiled successfully"}
-
         except yara.SyntaxError as e:
             return {"status": "error", "message": f"YARA syntax error: {str(e)}"}
         except Exception as e:
@@ -114,19 +107,20 @@ class EthicalHackingBot:
 
     def scan_with_yara(self, file_path, rule_content):
         try:
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.yar', delete=False) as f:
-                f.write(rule_content)
-                rule_file = f.name
-
-            rules = yara.compile(filepath=rule_file)
-            matches = rules.match(file_path)
-            os.unlink(rule_file)
-
+            rules = yara.compile(source=rule_content)
+            matches = rules.match(file_path, timeout=30)
             return {
                 "status": "success",
-                "matches": [{"rule": match.rule, "tags": match.tags} for match in matches]
+                "matches": [
+                    {
+                        "rule": match.rule,
+                        "tags": match.tags,
+                        "meta": match.meta,
+                        "strings": match.strings
+                    }
+                    for match in matches
+                ]
             }
-
         except Exception as e:
             return {"status": "error", "message": f"Scan failed: {str(e)}"}
 
@@ -248,26 +242,46 @@ def main():
             st.info("No scan results yet. Run a scan from the sidebar.")
 
     with tab3:
-        st.header("YARA Rule Builder")
+        st.header("YARA Rule Builder & File Scanner")
+
+        # --- YARA Rule Templates ---
+        yara_templates = {
+            "Suspicious String": '''rule suspicious_string_rule
+{
+    meta:
+        description = "Detects suspicious string in files"
+        author = "CyberSec Assistant"
+        date = "%s"
+    strings:
+        $string1 = "malware"
+    condition:
+        $string1
+}''' % datetime.now().strftime('%Y-%m-%d'),
+            "PE File (Windows EXE)": '''rule pe_file_rule
+{
+    meta:
+        description = "Detects PE executable files"
+        author = "CyberSec Assistant"
+        date = "%s"
+    strings:
+        $mz = { 4D 5A }
+    condition:
+        $mz at 0
+}''' % datetime.now().strftime('%Y-%m-%d'),
+            "Custom (edit below)": ""
+        }
+
+        selected_template = st.selectbox("YARA Rule Template", list(yara_templates.keys()))
+        rule_content = st.text_area(
+            "YARA Rule",
+            yara_templates[selected_template] if selected_template != "Custom (edit below)" else "",
+            height=300,
+            key="rule_editor"
+        )
+
         col1, col2 = st.columns(2)
 
         with col1:
-            st.subheader("Create YARA Rule")
-            rule_name = st.text_input("Rule Name", "sample_rule")
-            rule_description = st.text_area("Description", "Sample YARA rule")
-            sample_rule = f'''rule {rule_name}
-{{
-    meta:
-        description = "{rule_description}"
-        author = "CyberSec Assistant"
-        date = "{datetime.now().strftime('%Y-%m-%d')}"
-    strings:
-        $string1 = "suspicious_string"
-        $hex = {{ 4D 5A 90 00 }}
-    condition:
-        $string1 or $hex
-}}'''
-            rule_content = st.text_area("YARA Rule", sample_rule, height=300)
             if st.button("Validate Rule"):
                 result = st.session_state.bot.create_yara_rule(rule_content)
                 if result['status'] == 'success':
@@ -275,27 +289,53 @@ def main():
                 else:
                     st.error(result['message'])
 
+            if st.button("Explain Rule with Gemini AI"):
+                if st.session_state.bot.genai_client:
+                    ai_response = st.session_state.bot.get_ai_response(
+                        "Explain this YARA rule and what it is designed to detect:",
+                        rule_content
+                    )
+                    st.markdown(ai_response)
+                else:
+                    st.warning("Configure Gemini API first.")
+
         with col2:
-            st.subheader("File Scanner")
-            uploaded_file = st.file_uploader("Upload file to scan", type=['exe', 'dll', 'pdf', 'doc', 'txt'])
-            if uploaded_file and rule_content:
-                if st.button("Scan File"):
-                    with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
-                        tmp_file.write(uploaded_file.read())
-                        tmp_path = tmp_file.name
-                    try:
-                        result = st.session_state.bot.scan_with_yara(tmp_path, rule_content)
-                        if result['status'] == 'success':
-                            if result['matches']:
-                                st.success("Matches found!")
-                                for match in result['matches']:
-                                    st.write(f"Rule: {match['rule']}, Tags: {match['tags']}")
+            uploaded_files = st.file_uploader(
+                "Upload files to scan", type=['exe', 'dll', 'pdf', 'doc', 'txt'],
+                accept_multiple_files=True
+            )
+            if uploaded_files and rule_content:
+                if st.button("Scan Files"):
+                    matches_found = False
+                    for uploaded_file in uploaded_files:
+                        with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+                            tmp_file.write(uploaded_file.read())
+                            tmp_path = tmp_file.name
+                        try:
+                            result = st.session_state.bot.scan_with_yara(tmp_path, rule_content)
+                            if result['status'] == 'success':
+                                if result['matches']:
+                                    matches_found = True
+                                    st.success(f"Matches in `{uploaded_file.name}`:")
+                                    for match in result['matches']:
+                                        st.write(f"**Rule:** `{match['rule']}`")
+                                        if match['tags']:
+                                            st.write(f"**Tags:** {match['tags']}")
+                                        if match['meta']:
+                                            st.write(f"**Meta:** {match['meta']}")
+                                        if match['strings']:
+                                            for (offset, identifier, data) in match['strings']:
+                                                st.write(
+                                                    f"String `{identifier}` matched at offset `{offset}`: `{str(data)[:30]}...`"
+                                                )
+                                else:
+                                    st.info(f"No matches found in `{uploaded_file.name}`.")
                             else:
-                                st.info("No matches found.")
-                        else:
-                            st.error(result['message'])
-                    finally:
-                        os.unlink(tmp_path)
+                                st.error(f"Scan failed for `{uploaded_file.name}`: {result['message']}")
+                        finally:
+                            os.unlink(tmp_path)
+                    if not matches_found:
+                        st.warning("No matches found in any files.")
 
     st.markdown("---")
     st.markdown("""
