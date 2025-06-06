@@ -13,17 +13,19 @@ st.set_page_config(page_title="CyberSec Assistant", page_icon="🛡️", layout=
 # --- Port Parsing and Display Functions ---
 
 def parse_ports(output):
-    """Extracts port table and per-port details from Nmap output, robust to empty/odd input."""
     port_table = []
     details = {}
     in_table = False
     lines = output.splitlines()
-    # Extract port table
+    current_port = None
+
     for line in lines:
-        if line.strip().startswith("PORT "):  # Table header
+        # Table header (start)
+        if line.strip().startswith("PORT "):
             in_table = True
             continue
         if in_table:
+            # End table if not a port line
             if not line.strip() or not re.match(r"^\d+/", line):
                 in_table = False
                 continue
@@ -33,15 +35,13 @@ def parse_ports(output):
                 info = parts[3] if len(parts) > 3 else ""
                 port_table.append([port, state, service, info])
                 details[port] = []
-    # Parse per-port extra lines (scripts, banners)
-    current_port = None
-    for line in lines:
+        # Add details (script output, banners) under ports
         port_match = re.match(r"^(\d+/[a-z]+)", line)
         if port_match:
             current_port = port_match.group(1)
-            continue
-        if current_port and (line.strip().startswith('|') or line.strip().startswith('_')):
-            details.setdefault(current_port, []).append(line.strip())
+        elif current_port and (line.strip().startswith('|') or line.strip().startswith('_')):
+            if current_port in details:
+                details[current_port].append(line.strip())
     return port_table, details
 
 def render_port_table(port_table):
@@ -52,6 +52,28 @@ def render_port_table(port_table):
         color = "🟢" if state == "open" else ("🔴" if state == "closed" else "⚪")
         md += f"| {color} | `{port}` | **{state.capitalize()}** | `{service}` | {info} |\n"
     return md
+
+def render_port_tags(port_table):
+    open_ports = [f"{p[0]} ({p[2]})" for p in port_table if p[1] == "open"]
+    if open_ports:
+        tag_html = " ".join([
+            f"<span style='background:#16a34a;color:#fff;border-radius:6px;padding:3px 8px;margin-right:5px;'>{port}</span>"
+            for port in open_ports
+        ])
+        st.markdown(
+            f"🟢 <b>{len(open_ports)} open ports:</b> {tag_html}",
+            unsafe_allow_html=True
+        )
+
+def vuln_links(port_table):
+    for port, state, service, _ in port_table:
+        if state == "open":
+            portnum = port.split('/')[0]
+            cve_url = f"https://www.exploit-db.com/portsearch?port={portnum}"
+            st.markdown(
+                f"<a href='{cve_url}' target='_blank' style='text-decoration:none;'>🔗 <b>Check exploits for port {portnum}</b></a>",
+                unsafe_allow_html=True
+            )
 
 # --- Gemini & YARA Core Class ---
 
@@ -71,11 +93,13 @@ class EthicalHackingBot:
             if not self.is_valid_target(target):
                 return {"error": "Invalid target. Please provide a valid IP or domain."}
             scan_commands = {
-                "basic": ["nmap", "-sn", target],
-                "port_scan": ["nmap", "-sT", target],
-                "service_scan": ["nmap", "-sV", "-sC", target],
+                "basic": ["nmap", "-sn", target],                        # ping scan
+                "port_scan": ["nmap", "-sT", target],                    # TCP connect scan (no root needed)
+                "service_scan": ["nmap", "-sV", "-sC", target],          # version/service detection + default scripts
             }
-            result = subprocess.run(scan_commands[scan_type], capture_output=True, text=True, timeout=300)
+            if scan_type not in scan_commands:
+                return {"error": "Invalid scan type"}
+            result = subprocess.run(scan_commands[scan_type], capture_output=True, text=True, timeout=180)
             return {
                 "command": " ".join(scan_commands[scan_type]),
                 "stdout": result.stdout,
@@ -84,7 +108,7 @@ class EthicalHackingBot:
                 "scan_type": scan_type
             }
         except subprocess.TimeoutExpired:
-            return {"error": "Scan timed out after 5 minutes"}
+            return {"error": "Scan timed out after 3 minutes"}
         except Exception as e:
             return {"error": f"Scan failed: {str(e)}"}
     def create_yara_rule(self, rule_content):
@@ -185,6 +209,7 @@ def main():
                 st.markdown(f"**Scan Command:** `{result.get('command', 'N/A')}`")
                 output = result.get('stdout', '')
                 scan_type = result.get("scan_type", "")
+                st.markdown(f"⏰ <b>Scan finished at:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", unsafe_allow_html=True)
                 if scan_type == "basic":
                     if "Host is up" in output:
                         st.success("🎯 Host is **up and reachable!**")
@@ -194,17 +219,16 @@ def main():
                         st.info(output)
                 else:
                     port_table, details = parse_ports(output)
-                    st.markdown("#### Port Table")
-                    st.markdown(render_port_table(port_table), unsafe_allow_html=True)
-                    # Expandable details
-                    for port, state, service, info in port_table:
-                        if details.get(port):
-                            with st.expander(f"📝 Details for {port} ({service})", expanded=False):
-                                st.code("\n".join(details[port]), language="text")
-                    # Professional summary at the end
-                    open_ports = [f"`{p[0]}`" for p in port_table if p[1] == "open"]
-                    if open_ports:
-                        st.success(f"**Open ports:** {', '.join(open_ports)}")
+                    if port_table:
+                        render_port_tags(port_table)
+                        st.markdown("#### Port Table")
+                        st.markdown(render_port_table(port_table), unsafe_allow_html=True)
+                        vuln_links(port_table)
+                        # Expandable details
+                        for port, state, service, info in port_table:
+                            if details.get(port):
+                                with st.expander(f"📝 Details for {port} ({service})", expanded=False):
+                                    st.code("\n".join(details[port]), language="text")
                     else:
                         st.warning("No open ports detected.")
                     # Gemini AI summary
