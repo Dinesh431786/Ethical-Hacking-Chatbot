@@ -5,9 +5,9 @@ import json
 import re
 import os
 import tempfile
+import pandas as pd
 from datetime import datetime
 import yara
-import pandas as pd
 
 st.set_page_config(
     page_title="CyberSec Assistant",
@@ -46,6 +46,40 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# ------------- Nmap Output Parser -------------
+
+def parse_ports(nmap_output):
+    """
+    Parses nmap output and returns (port_table, port_details)
+    port_table: list of (port, state, service, info)
+    port_details: dict of port -> list of additional details
+    """
+    port_table = []
+    details = {}
+    current_port = None
+    for line in nmap_output.splitlines():
+        # Example: 80/tcp  open  http  Apache httpd 2.4.29 ((Ubuntu))
+        port_match = re.match(r"^(\d+/tcp)\s+(\w+)\s+([^\s]+)\s*(.*)", line)
+        if port_match:
+            port, state, service, info = port_match.groups()
+            port_table.append((port, state.capitalize(), service, info.strip()))
+            current_port = port
+            details[current_port] = []
+        # For lines like: 80/tcp  open  http
+        else:
+            port_match2 = re.match(r"^(\d+/tcp)\s+(\w+)\s+([^\s]+)", line)
+            if port_match2:
+                port, state, service = port_match2.groups()
+                port_table.append((port, state.capitalize(), service, ""))
+                current_port = port
+                details[current_port] = []
+            # Sub-details, indented with |
+            elif line.startswith("|") and current_port:
+                details[current_port].append(line.strip())
+    return port_table, details
+
+# ------------- EthicalHackingBot -------------
+
 class EthicalHackingBot:
     def __init__(self):
         self.genai_client = None
@@ -60,32 +94,29 @@ class EthicalHackingBot:
             return False
 
     def run_nmap_scan(self, target, scan_type="network_map"):
-        # Compose nmap command
+        # Set scan commands for all four features!
         scan_commands = {
             "network_map": ["nmap", "-sn", target],
-            "port_scan": ["nmap", "-sT", target],  # Fast port scan, no root needed
-            "service_scan": ["nmap", "-sV", "-sC", target],  # More detail, a bit slower
+            "port_scan": ["nmap", "-sT", target],
+            "service_scan": ["nmap", "-sV", "-sC", target]
         }
         if scan_type not in scan_commands:
             return {"error": "Invalid scan type"}
-
-        command = scan_commands[scan_type]
         try:
             result = subprocess.run(
-                command,
+                scan_commands[scan_type],
                 capture_output=True,
                 text=True,
-                timeout=120
+                timeout=90
             )
             return {
-                "command": " ".join(command),
+                "command": " ".join(scan_commands[scan_type]),
                 "stdout": result.stdout,
                 "stderr": result.stderr,
-                "returncode": result.returncode,
-                "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                "returncode": result.returncode
             }
         except subprocess.TimeoutExpired:
-            return {"error": "Scan timed out after 2 minutes"}
+            return {"error": "Scan timed out after 90 seconds"}
         except Exception as e:
             return {"error": f"Scan failed: {str(e)}"}
 
@@ -128,6 +159,7 @@ You provide guidance on:
 - Malware analysis
 - Security best practices
 - Tool usage (nmap, YARA, etc.)
+
 Always emphasize ethical use and proper authorization. Never assist with illegal activities.
 Provide detailed, technical responses with practical examples when appropriate."""
             full_prompt = f"{system_prompt}\n\nContext: {context}\n\nUser Query: {user_input}"
@@ -136,46 +168,7 @@ Provide detailed, technical responses with practical examples when appropriate."
         except Exception as e:
             return f"Error getting AI response: {str(e)}"
 
-def parse_ports(nmap_output):
-    """
-    Returns a tuple: (port_table, details)
-    port_table: list of [port, state, service, info]
-    details: dict of port to extra nmap lines (script results, etc.)
-    """
-    lines = nmap_output.splitlines()
-    port_section = False
-    port_table = []
-    details = {}
-    current_port = None
-    for line in lines:
-        # Find port section start
-        if re.match(r"PORT\s+STATE\s+SERVICE", line):
-            port_section = True
-            continue
-        if port_section and line.strip() == "":
-            break
-        if port_section:
-            m = re.match(r"(\d+\/\w+)\s+(\w+)\s+(\S+)(.*)", line)
-            if m:
-                port, state, service, info = m.groups()
-                info = info.strip()
-                port_table.append([port, state.capitalize(), service, info])
-                current_port = port
-                details[current_port] = []
-            elif current_port and line.startswith("|"):
-                details[current_port].append(line.strip())
-            elif current_port and line.startswith(" "):
-                details[current_port].append(line.strip())
-    return port_table, details
-
-def parse_hosts(nmap_output):
-    # For -sn output: return all "Nmap scan report for ..." lines
-    hosts = []
-    for line in nmap_output.splitlines():
-        m = re.match(r"Nmap scan report for (.+)", line)
-        if m:
-            hosts.append(m.group(1))
-    return hosts
+# ----------------- Streamlit Main UI -----------------
 
 def main():
     st.markdown("""
@@ -194,7 +187,6 @@ def main():
     </div>
     """, unsafe_allow_html=True)
 
-    # --- Sidebar ---
     if 'bot' not in st.session_state:
         st.session_state.bot = EthicalHackingBot()
     bot = st.session_state.bot
@@ -205,32 +197,39 @@ def main():
         if gemini_key and not bot.genai_client:
             if bot.initialize_gemini(gemini_key):
                 st.success("Gemini API initialized!")
+
         st.header("Nmap Quick Scan")
-        target = st.text_input("Target (IP/Domain)", placeholder="e.g. google.com")
+        target = st.text_input("Target (IP/Domain)", placeholder="google.com")
         scan_type = st.selectbox("Nmap Scan Type", [
-            "network_map", "port_scan", "service_scan"
+            "network_map",   # ICMP only, host discovery (ping)
+            "port_scan",     # TCP port scan
+            "service_scan"   # Port scan + service/version/scripts
         ], format_func=lambda x: {
-            "network_map": "Network Map (Ping Discovery)",
+            "network_map": "Network Map (Ping Sweep)",
             "port_scan": "Port Scan (Fast)",
-            "service_scan": "Service Scan (Advanced)"
-        }.get(x, x))
-        scan_start = st.button("Run Scan")
-        if scan_start and target:
-            with st.spinner("Running Nmap scan..."):
+            "service_scan": "Service/Version Scan (Advanced)"
+        }[x])
+
+        if st.button("Run Nmap Scan") and target:
+            with st.spinner("Running scan..."):
                 result = bot.run_nmap_scan(target, scan_type)
-                st.session_state['last_scan'] = result
-                st.session_state['last_scan_type'] = scan_type
+                st.session_state.last_scan = {
+                    "result": result,
+                    "scan_type": scan_type,
+                    "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                }
 
     tab1, tab2, tab3 = st.tabs(["💬 Chat Assistant", "🔍 Scan Results", "📝 YARA Rules"])
 
-    # --- Tab 1: Chat ---
     with tab1:
         st.header("AI Security Assistant")
         if 'messages' not in st.session_state:
             st.session_state.messages = []
+
         for message in st.session_state.messages:
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
+
         if prompt := st.chat_input("Ask about cybersecurity, tools, or techniques..."):
             st.session_state.messages.append({"role": "user", "content": prompt})
             with st.chat_message("user"):
@@ -239,57 +238,60 @@ def main():
                 with st.spinner("Thinking..."):
                     context = ""
                     if 'last_scan' in st.session_state:
-                        context = f"Recent scan results: {json.dumps(st.session_state['last_scan'], indent=2)}"
+                        context = f"Recent scan results: {json.dumps(st.session_state.last_scan['result'], indent=2)}"
                     response = bot.get_ai_response(prompt, context)
                     st.markdown(response)
                     st.session_state.messages.append({"role": "assistant", "content": response})
 
-    # --- Tab 2: Scan Results ---
     with tab2:
         st.header("Scan Results")
-        result = st.session_state.get("last_scan", None)
-        scan_type = st.session_state.get("last_scan_type", None)
-        output = result.get("stdout", "") if result else ""
-        port_table, details = parse_ports(output) if output else ([], {})
-        st.markdown(f"**Scan Command:** `{result['command']}`" if result else "")
-        st.markdown(f"⏰ <b>Scan finished at:</b> {result.get('timestamp', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))}", unsafe_allow_html=True) if result else None
+        if 'last_scan' in st.session_state:
+            result = st.session_state.last_scan["result"]
+            scan_type = st.session_state.last_scan["scan_type"]
+            scan_time = st.session_state.last_scan["time"]
+            st.markdown(f"**Scan Command:** `{result.get('command', 'N/A')}`")
+            st.markdown(f"⏰ <b>Scan finished at:</b> {scan_time}", unsafe_allow_html=True)
 
-        if result and scan_type == "network_map":
-            hosts_up = parse_hosts(output)
-            if hosts_up:
-                st.markdown("**Discovered Hosts (Online):**")
-                for host in hosts_up:
-                    st.success(f"🟢 {host}")
+            nmap_output = result.get("stdout", "")
+            port_table, port_details = parse_ports(nmap_output)
+            # Port Table
+            if scan_type != "network_map" and port_table:
+                port_data = []
+                for p in port_table:
+                    color = "🟢" if p[1].lower() == "open" else "🔴"
+                    port_data.append({
+                        "Port": f"{color} {p[0]}",
+                        "State": p[1],
+                        "Service": p[2],
+                        "Info": p[3] if len(p) > 3 else ""
+                    })
+                st.markdown("**Port Table**")
+                st.table(pd.DataFrame(port_data, columns=["Port", "State", "Service", "Info"]))
+
+                # Show per-port details if available
+                for port, details in port_details.items():
+                    if details:
+                        with st.expander(f"More about {port}"):
+                            for d in details:
+                                st.markdown(d)
+            elif scan_type == "network_map":
+                if "Host is up" in nmap_output:
+                    # Basic summary
+                    up_match = re.findall(r"Nmap scan report for (.+)", nmap_output)
+                    up_hosts = up_match if up_match else []
+                    st.success(f"**Host(s) detected as up:** {', '.join(up_hosts)}")
+                else:
+                    st.info("No open ports detected.")
             else:
-                st.warning("No online hosts found.")
-            st.markdown("<br><b>Full Nmap Output</b>", unsafe_allow_html=True)
-            st.code(output, language="text")
+                st.info("No open ports detected.")
 
-        elif result and port_table:
-            st.markdown("**Port Table**")
-            df = pd.DataFrame(port_table, columns=["Port", "State", "Service", "Info"])
-            # Show port details with colored status
-            def format_port_row(row):
-                color = "🟢" if row["State"].lower() == "open" else "🔴"
-                return f"{color} {row['Port']}", row["State"], row["Service"], row["Info"]
-            formatted_table = [format_port_row(row) for _, row in df.iterrows()]
-            st.table(pd.DataFrame(formatted_table, columns=["Port", "State", "Service", "Info"]))
-            # Optionally show detailed info
-            for port, lines in details.items():
-                if lines:
-                    with st.expander(f"Advanced Info: {port}"):
-                        for l in lines:
-                            st.markdown(f"<code>{l}</code>", unsafe_allow_html=True)
-            st.markdown("<br><b>Full Nmap Output</b>", unsafe_allow_html=True)
-            st.code(output, language="text")
-        elif result:
-            st.warning("No open ports detected.")
-            st.markdown("<br><b>Full Nmap Output</b>", unsafe_allow_html=True)
-            st.code(output, language="text")
+            # Full raw output in expander
+            with st.expander("Full Nmap Output"):
+                st.code(nmap_output, language="text")
+
         else:
             st.info("No scan results yet. Run a scan from the sidebar.")
 
-    # --- Tab 3: YARA Rules ---
     with tab3:
         st.header("YARA Rule Builder & File Scanner")
         yara_templates = {
@@ -317,6 +319,7 @@ def main():
 }''' % datetime.now().strftime('%Y-%m-%d'),
             "Custom (edit below)": ""
         }
+
         selected_template = st.selectbox("YARA Rule Template", list(yara_templates.keys()))
         rule_content = st.text_area(
             "YARA Rule",
@@ -342,6 +345,7 @@ def main():
                     st.markdown(ai_response)
                 else:
                     st.warning("Configure Gemini API first.")
+
         with col2:
             uploaded_files = st.file_uploader(
                 "Upload files to scan", type=['exe', 'dll', 'pdf', 'doc', 'txt'],
