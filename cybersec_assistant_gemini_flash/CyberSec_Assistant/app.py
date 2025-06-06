@@ -45,7 +45,7 @@ class EthicalHackingBot:
             st.error(f"Failed to initialize Gemini API: {str(e)}")
             return False
 
-    def run_nmap_scan(self, target, scan_type, custom_ports=None):
+    def run_nmap_scan(self, target, scan_type):
         try:
             if not self.is_valid_target(target):
                 return {"error": "Invalid target. Please provide a valid IP or domain."}
@@ -53,7 +53,7 @@ class EthicalHackingBot:
             if scan_type == "basic":
                 scan_command = ["nmap", "-sn", target]
             elif scan_type == "port_scan":
-                scan_command = ["nmap", "-sT", "-p", custom_ports if custom_ports else "21,80,443,3306", target]
+                scan_command = ["nmap", "-sT", target]  # no custom ports, use nmap's defaults
             elif scan_type == "service_scan":
                 scan_command = ["nmap", "-sV", "-sC", target]
             else:
@@ -160,14 +160,10 @@ def main():
         st.header("Nmap Quick Scan")
         target = st.text_input("Target (IP/Domain)", placeholder="192.168.1.1 or example.com")
         scan_type = st.selectbox("Nmap Scan Type", ["basic", "port_scan", "service_scan"])
-        custom_ports = st.text_input("Ports (comma-separated)", "21,80,443,3306") if scan_type == "port_scan" else None
 
         if st.button("Run Nmap Scan") and target:
             with st.spinner("Running scan..."):
-                if scan_type == "port_scan":
-                    result = st.session_state.bot.run_nmap_scan(target, scan_type, custom_ports)
-                else:
-                    result = st.session_state.bot.run_nmap_scan(target, scan_type)
+                result = st.session_state.bot.run_nmap_scan(target, scan_type)
                 st.session_state.last_scan = result
 
     tab1, tab2, tab3 = st.tabs(["💬 Chat Assistant", "🔍 Scan Results", "📝 YARA Rules"])
