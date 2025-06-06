@@ -33,9 +33,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 def clean_nmap_output(output):
-    """
-    Remove Nmap banner/footer and empty lines for cleaner display.
-    """
+    """Remove Nmap banner/footer and empty lines for cleaner display."""
     lines = output.split('\n')
     filtered = []
     skip_prefixes = [
@@ -50,29 +48,38 @@ def clean_nmap_output(output):
         filtered.append(line)
     return '\n'.join(filtered)
 
-def highlight_ports(output):
-    """
-    Highlight open ports in the Nmap output with emojis and Markdown.
-    """
-    port_section = []
-    in_ports = False
-    for line in output.splitlines():
+def extract_port_table(output):
+    """Extract just the main port/service table (PORT, STATE, SERVICE, VERSION) from nmap output."""
+    port_lines = []
+    lines = output.splitlines()
+    in_table = False
+    for line in lines:
         if re.match(r"^PORT\s+STATE\s+SERVICE", line):
-            in_ports = True
-            port_section.append(f"**`{line}`**")
+            in_table = True
+            port_lines.append(line)
             continue
-        if in_ports:
-            if not line.strip() or line.startswith("Service Info:"):
+        if in_table:
+            # Table ends on blank line or with summary line
+            if not line.strip() or re.match(r"^[A-Z]", line):  # Sometimes summary or next section starts with uppercase
                 break
-            if "open" in line:
-                # Add green dot for open ports
-                port_section.append(f":green_circle: `{line}`")
-            elif "filtered" in line or "closed" in line:
-                # Optional: muted color for closed/filtered
-                port_section.append(f":red_circle: `{line}`")
-            else:
-                port_section.append(f"`{line}`")
-    return "\n".join(port_section) if port_section else ""
+            port_lines.append(line)
+    return port_lines
+
+def highlight_ports_table(port_lines):
+    """Add green dot to 'open' ports and format as Markdown."""
+    pretty = []
+    if not port_lines:
+        return ""
+    header = port_lines[0]
+    pretty.append(f"**`{header}`**")
+    for line in port_lines[1:]:
+        if "open" in line:
+            pretty.append(f":green_circle: `{line}`")
+        elif "closed" in line or "filtered" in line:
+            pretty.append(f":red_circle: `{line}`")
+        else:
+            pretty.append(f"`{line}`")
+    return "\n".join(pretty)
 
 class EthicalHackingBot:
     def __init__(self):
@@ -95,7 +102,7 @@ class EthicalHackingBot:
             if scan_type == "basic":
                 scan_command = ["nmap", "-sn", target]
             elif scan_type == "port_scan":
-                scan_command = ["nmap", "-sT", target]  # default 1000 ports
+                scan_command = ["nmap", "-sT", target]
             elif scan_type == "service_scan":
                 scan_command = ["nmap", "-sV", "-sC", target]
             else:
@@ -243,23 +250,25 @@ def main():
                 if result.get('stdout'):
                     st.markdown("### :rocket: **Open Ports & Services**")
                     clean_output = clean_nmap_output(result['stdout'])
-                    port_table = highlight_ports(clean_output)
-                    if port_table:
-                        st.markdown(port_table)
-                    # Show rest of the output (summary, host info, etc)
-                    other_output = []
-                    in_ports = False
-                    for line in clean_output.split('\n'):
-                        if re.match(r"^PORT\s+STATE\s+SERVICE", line):
-                            in_ports = True
-                            continue
-                        if in_ports:
-                            if not line.strip():
-                                in_ports = False
-                            continue
-                        other_output.append(line)
-                    if other_output:
-                        st.code('\n'.join(other_output), language='text')
+                    port_lines = extract_port_table(clean_output)
+                    if port_lines:
+                        st.markdown(highlight_ports_table(port_lines))
+                        open_ports = [line for line in port_lines[1:] if "open" in line]
+                        st.info(f"**{len(open_ports)} open ports found.**")
+                    else:
+                        st.warning("No ports found in the scan.")
+                    # Advanced/script output in expander
+                    extra_lines = []
+                    if port_lines:
+                        all_lines = clean_output.splitlines()
+                        try:
+                            idx = all_lines.index(port_lines[-1]) + 1
+                            extra_lines = all_lines[idx:]
+                        except ValueError:
+                            extra_lines = []
+                    if extra_lines:
+                        with st.expander("Show full advanced scan output (for experts)", expanded=False):
+                            st.code("\n".join(extra_lines), language="text")
                 if result.get('stderr'):
                     st.markdown("**Errors:**")
                     st.code(result['stderr'], language='text')
@@ -376,7 +385,4 @@ def main():
         <p>🛡️ CyberSec Assistant - For Ethical Security Research Only</p>
         <p>Always ensure proper authorization before testing systems</p>
     </div>
-    """, unsafe_allow_html=True)
-
-if __name__ == "__main__":
-    main()
+   
