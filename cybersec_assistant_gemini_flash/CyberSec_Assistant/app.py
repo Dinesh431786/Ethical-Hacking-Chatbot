@@ -45,29 +45,29 @@ class EthicalHackingBot:
             st.error(f"Failed to initialize Gemini API: {str(e)}")
             return False
 
-    def run_nmap_scan(self, target, scan_type, custom_ports):
+    def run_nmap_scan(self, target, scan_type, custom_ports=None):
         try:
             if not self.is_valid_target(target):
                 return {"error": "Invalid target. Please provide a valid IP or domain."}
 
-            scan_commands = {
-                "basic": ["nmap", "-sn", target],
-                "port_scan": ["nmap", "-sT", "-p", custom_ports, target],
-                "service_scan": ["nmap", "-sV", "-sC", "-p", custom_ports, target],
-            }
-
-            if scan_type not in scan_commands:
+            if scan_type == "basic":
+                scan_command = ["nmap", "-sn", target]
+            elif scan_type == "port_scan":
+                scan_command = ["nmap", "-sT", "-p", custom_ports if custom_ports else "21,80,443,3306", target]
+            elif scan_type == "service_scan":
+                scan_command = ["nmap", "-sV", "-sC", target]
+            else:
                 return {"error": "Invalid scan type"}
 
             result = subprocess.run(
-                scan_commands[scan_type],
+                scan_command,
                 capture_output=True,
                 text=True,
                 timeout=300
             )
 
             return {
-                "command": " ".join(scan_commands[scan_type]),
+                "command": " ".join(scan_command),
                 "stdout": result.stdout,
                 "stderr": result.stderr,
                 "returncode": result.returncode
@@ -160,7 +160,7 @@ def main():
         st.header("Nmap Quick Scan")
         target = st.text_input("Target (IP/Domain)", placeholder="192.168.1.1 or example.com")
         scan_type = st.selectbox("Nmap Scan Type", ["basic", "port_scan", "service_scan"])
-        custom_ports = st.text_input("Ports (comma-separated)", "21,80,443,3306") if scan_type != "basic" else ""
+        custom_ports = st.text_input("Ports (comma-separated)", "21,80,443,3306") if scan_type == "port_scan" else None
 
         if st.button("Run Nmap Scan") and target:
             with st.spinner("Running scan..."):
