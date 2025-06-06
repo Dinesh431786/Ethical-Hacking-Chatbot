@@ -164,7 +164,10 @@ def main():
 
         if st.button("Run Nmap Scan") and target:
             with st.spinner("Running scan..."):
-                result = st.session_state.bot.run_nmap_scan(target, scan_type, custom_ports)
+                if scan_type == "port_scan":
+                    result = st.session_state.bot.run_nmap_scan(target, scan_type, custom_ports)
+                else:
+                    result = st.session_state.bot.run_nmap_scan(target, scan_type)
                 st.session_state.last_scan = result
 
     tab1, tab2, tab3 = st.tabs(["💬 Chat Assistant", "🔍 Scan Results", "📝 YARA Rules"])
