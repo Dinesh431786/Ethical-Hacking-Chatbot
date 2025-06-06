@@ -7,8 +7,6 @@ import os
 import tempfile
 from datetime import datetime
 import yara
-import socket
-import requests
 
 st.set_page_config(
     page_title="CyberSec Assistant",
@@ -24,22 +22,9 @@ st.markdown("""
         border-radius: 10px;
         margin-bottom: 2rem;
     }
-    .tool-box {
-        background: #f0f2f6;
-        padding: 1rem;
-        border-radius: 8px;
-        margin: 1rem 0;
-    }
     .warning-box {
         background: #fff3cd;
         border: 1px solid #ffeaa7;
-        padding: 1rem;
-        border-radius: 8px;
-        margin: 1rem 0;
-    }
-    .success-box {
-        background: #d4edda;
-        border: 1px solid #c3e6cb;
         padding: 1rem;
         border-radius: 8px;
         margin: 1rem 0;
@@ -50,7 +35,6 @@ st.markdown("""
 class EthicalHackingBot:
     def __init__(self):
         self.genai_client = None
-        self.conversation_history = []
 
     def initialize_gemini(self, api_key):
         try:
@@ -61,7 +45,7 @@ class EthicalHackingBot:
             st.error(f"Failed to initialize Gemini API: {str(e)}")
             return False
 
-    def run_nmap_scan(self, target, scan_type, custom_ports, nse_scripts, timeout_val):
+    def run_nmap_scan(self, target, scan_type, custom_ports):
         try:
             if not self.is_valid_target(target):
                 return {"error": "Invalid target. Please provide a valid IP or domain."}
@@ -70,9 +54,6 @@ class EthicalHackingBot:
                 "basic": ["nmap", "-sn", target],
                 "port_scan": ["nmap", "-sT", "-p", custom_ports, target],
                 "service_scan": ["nmap", "-sV", "-sC", "-p", custom_ports, target],
-                "vuln_scan": ["nmap", "--script", nse_scripts if nse_scripts else "vuln", "-p", custom_ports, target],
-                "stealth": ["nmap", "-sT", "-p", custom_ports, target],  # -sT, not -sS (see notice below)
-                "custom": ["nmap", "-p", custom_ports, "--script", nse_scripts, target]
             }
 
             if scan_type not in scan_commands:
@@ -82,7 +63,7 @@ class EthicalHackingBot:
                 scan_commands[scan_type],
                 capture_output=True,
                 text=True,
-                timeout=timeout_val
+                timeout=300
             )
 
             return {
@@ -93,7 +74,7 @@ class EthicalHackingBot:
             }
 
         except subprocess.TimeoutExpired:
-            return {"error": f"Scan timed out after {timeout_val // 60} minutes"}
+            return {"error": "Scan timed out after 5 minutes"}
         except Exception as e:
             return {"error": f"Scan failed: {str(e)}"}
 
@@ -133,7 +114,6 @@ class EthicalHackingBot:
     def get_ai_response(self, user_input, context=""):
         if not self.genai_client:
             return "Please configure your Gemini API key first."
-
         try:
             system_prompt = """You are a cybersecurity expert assistant focused on ethical hacking and security research.
 You provide guidance on:
@@ -142,15 +122,11 @@ You provide guidance on:
 - Malware analysis
 - Security best practices
 - Tool usage (nmap, YARA, etc.)
-
 Always emphasize ethical use and proper authorization. Never assist with illegal activities.
 Provide detailed, technical responses with practical examples when appropriate."""
-
             full_prompt = f"{system_prompt}\n\nContext: {context}\n\nUser Query: {user_input}"
-
             response = self.genai_client.generate_content(full_prompt)
             return response.text
-
         except Exception as e:
             return f"Error getting AI response: {str(e)}"
 
@@ -181,26 +157,14 @@ def main():
             if st.session_state.bot.initialize_gemini(gemini_key):
                 st.success("Gemini API initialized!")
 
-        st.header("Nmap Scan Options (Expert Mode)")
+        st.header("Nmap Quick Scan")
         target = st.text_input("Target (IP/Domain)", placeholder="192.168.1.1 or example.com")
-        scan_type = st.selectbox("Nmap Scan Type", [
-            "basic", "port_scan", "service_scan", "vuln_scan", "stealth", "custom"
-        ])
-        custom_ports = st.text_input("Ports (comma-separated)", "21,80,443,3306")
-        nse_scripts = st.text_input("Nmap NSE Scripts (comma-separated, e.g., vuln,http-vuln-cve2017-5638)", "vuln")
-        timeout_val = st.slider("Scan timeout (seconds)", min_value=60, max_value=1800, value=300, step=60)
-
-        # Preview and Download Scan Command
-        nmap_cmd = f"nmap {'-sn' if scan_type=='basic' else ''} {'-sT' if scan_type in ['port_scan', 'stealth'] else ''} {'-sV -sC' if scan_type == 'service_scan' else ''} {'--script ' + nse_scripts if scan_type in ['vuln_scan','custom'] else ''} {'-p ' + custom_ports if scan_type != 'basic' else ''} {target}".replace("  "," ").strip()
-        st.code(nmap_cmd, language="bash")
-        st.download_button("Download Nmap Command Script", nmap_cmd, file_name="nmap_scan.sh")
-        if scan_type == "stealth":
-            st.info("Note: True SYN stealth scan (-sS) requires root/admin and is only possible locally. This cloud app uses TCP connect (-sT) instead.")
+        scan_type = st.selectbox("Nmap Scan Type", ["basic", "port_scan", "service_scan"])
+        custom_ports = st.text_input("Ports (comma-separated)", "21,80,443,3306") if scan_type != "basic" else ""
 
         if st.button("Run Nmap Scan") and target:
             with st.spinner("Running scan..."):
-                # FIX: Pass all required arguments here!
-                result = st.session_state.bot.run_nmap_scan(target, scan_type, custom_ports, nse_scripts, timeout_val)
+                result = st.session_state.bot.run_nmap_scan(target, scan_type, custom_ports)
                 st.session_state.last_scan = result
 
     tab1, tab2, tab3 = st.tabs(["💬 Chat Assistant", "🔍 Scan Results", "📝 YARA Rules"])
@@ -218,13 +182,11 @@ def main():
             st.session_state.messages.append({"role": "user", "content": prompt})
             with st.chat_message("user"):
                 st.markdown(prompt)
-
             with st.chat_message("assistant"):
                 with st.spinner("Thinking..."):
                     context = ""
                     if 'last_scan' in st.session_state:
                         context = f"Recent scan results: {json.dumps(st.session_state.last_scan, indent=2)}"
-
                     response = st.session_state.bot.get_ai_response(prompt, context)
                     st.markdown(response)
                     st.session_state.messages.append({"role": "assistant", "content": response})
