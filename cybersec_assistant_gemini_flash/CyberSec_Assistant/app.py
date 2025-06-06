@@ -61,17 +61,18 @@ class EthicalHackingBot:
             st.error(f"Failed to initialize Gemini API: {str(e)}")
             return False
 
-    def run_nmap_scan(self, target, scan_type="basic"):
+    def run_nmap_scan(self, target, scan_type, custom_ports, nse_scripts, timeout_val):
         try:
             if not self.is_valid_target(target):
                 return {"error": "Invalid target. Please provide a valid IP or domain."}
 
             scan_commands = {
                 "basic": ["nmap", "-sn", target],
-                "port_scan": ["nmap", "-sT", target],  # changed to -sT for non-root environments
-                "service_scan": ["nmap", "-sV", "-sC", target],
-                "vuln_scan": ["nmap", "--script", "vuln", target],
-                "stealth": ["nmap", "-sT", target],  # fallback to -sT; -sS requires root
+                "port_scan": ["nmap", "-sT", "-p", custom_ports, target],
+                "service_scan": ["nmap", "-sV", "-sC", "-p", custom_ports, target],
+                "vuln_scan": ["nmap", "--script", nse_scripts if nse_scripts else "vuln", "-p", custom_ports, target],
+                "stealth": ["nmap", "-sT", "-p", custom_ports, target],  # -sT, not -sS (see notice below)
+                "custom": ["nmap", "-p", custom_ports, "--script", nse_scripts, target]
             }
 
             if scan_type not in scan_commands:
@@ -81,7 +82,7 @@ class EthicalHackingBot:
                 scan_commands[scan_type],
                 capture_output=True,
                 text=True,
-                timeout=300
+                timeout=timeout_val
             )
 
             return {
@@ -92,7 +93,7 @@ class EthicalHackingBot:
             }
 
         except subprocess.TimeoutExpired:
-            return {"error": "Scan timed out after 5 minutes"}
+            return {"error": f"Scan timed out after {timeout_val // 60} minutes"}
         except Exception as e:
             return {"error": f"Scan failed: {str(e)}"}
 
@@ -180,13 +181,25 @@ def main():
             if st.session_state.bot.initialize_gemini(gemini_key):
                 st.success("Gemini API initialized!")
 
-        st.header("Quick Tools")
+        st.header("Nmap Scan Options (Expert Mode)")
         target = st.text_input("Target (IP/Domain)", placeholder="192.168.1.1 or example.com")
-        scan_type = st.selectbox("Nmap Scan Type", ["basic", "port_scan", "service_scan", "vuln_scan", "stealth"])
+        scan_type = st.selectbox("Nmap Scan Type", [
+            "basic", "port_scan", "service_scan", "vuln_scan", "stealth", "custom"
+        ])
+        custom_ports = st.text_input("Ports (comma-separated)", "21,80,443,3306")
+        nse_scripts = st.text_input("Nmap NSE Scripts (comma-separated, e.g., vuln,http-vuln-cve2017-5638)", "vuln")
+        timeout_val = st.slider("Scan timeout (seconds)", min_value=60, max_value=1800, value=300, step=60)
+
+        # Preview and Download Scan Command
+        nmap_cmd = f"nmap {'-sn' if scan_type=='basic' else ''} {'-sT' if scan_type in ['port_scan', 'stealth'] else ''} {'-sV -sC' if scan_type == 'service_scan' else ''} {'--script ' + nse_scripts if scan_type in ['vuln_scan','custom'] else ''} {'-p ' + custom_ports if scan_type != 'basic' else ''} {target}".replace("  "," ").strip()
+        st.code(nmap_cmd, language="bash")
+        st.download_button("Download Nmap Command Script", nmap_cmd, file_name="nmap_scan.sh")
+        if scan_type == "stealth":
+            st.info("Note: True SYN stealth scan (-sS) requires root/admin and is only possible locally. This cloud app uses TCP connect (-sT) instead.")
 
         if st.button("Run Nmap Scan") and target:
             with st.spinner("Running scan..."):
-                result = st.session_state.bot.run_nmap_scan(target, scan_type)
+                result = st.session_state.bot.run_nmap_scan(target, scan_type, custom_ports, nse_scripts, timeout_val)
                 st.session_state.last_scan = result
 
     tab1, tab2, tab3 = st.tabs(["💬 Chat Assistant", "🔍 Scan Results", "📝 YARA Rules"])
@@ -244,7 +257,6 @@ def main():
     with tab3:
         st.header("YARA Rule Builder & File Scanner")
 
-        # --- YARA Rule Templates ---
         yara_templates = {
             "Suspicious String": '''rule suspicious_string_rule
 {
