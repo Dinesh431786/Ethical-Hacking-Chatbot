@@ -7,10 +7,21 @@ import os
 import tempfile
 from datetime import datetime
 import yara
+import base64
 
 st.set_page_config(page_title="CyberSec Assistant", page_icon="🛡️", layout="wide")
 
-# --- Port Parsing and Display Functions ---
+PORT_RISK = {
+    "21": "FTP is plain-text. Often targeted for brute force and leaks.",
+    "22": "SSH – Secure, but brute force attacks are common.",
+    "23": "Telnet – Unencrypted, should be disabled.",
+    "25": "SMTP – Often abused for spam.",
+    "53": "DNS – Cache poisoning, amplification DDoS possible.",
+    "80": "HTTP – Unencrypted, outdated web servers are frequent targets.",
+    "443": "HTTPS – Secure, but may hide malware or be misconfigured.",
+    "3306": "MySQL – Exposed database. Risk of SQL injection or data leaks.",
+    "3389": "RDP – Target for ransomware and brute force.",
+}
 
 def parse_ports(output):
     port_table = []
@@ -20,12 +31,10 @@ def parse_ports(output):
     current_port = None
 
     for line in lines:
-        # Table header (start)
         if line.strip().startswith("PORT "):
             in_table = True
             continue
         if in_table:
-            # End table if not a port line
             if not line.strip() or not re.match(r"^\d+/", line):
                 in_table = False
                 continue
@@ -35,7 +44,6 @@ def parse_ports(output):
                 info = parts[3] if len(parts) > 3 else ""
                 port_table.append([port, state, service, info])
                 details[port] = []
-        # Add details (script output, banners) under ports
         port_match = re.match(r"^(\d+/[a-z]+)", line)
         if port_match:
             current_port = port_match.group(1)
@@ -53,17 +61,26 @@ def render_port_table(port_table):
         md += f"| {color} | `{port}` | **{state.capitalize()}** | `{service}` | {info} |\n"
     return md
 
-def render_port_tags(port_table):
-    open_ports = [f"{p[0]} ({p[2]})" for p in port_table if p[1] == "open"]
-    if open_ports:
-        tag_html = " ".join([
-            f"<span style='background:#16a34a;color:#fff;border-radius:6px;padding:3px 8px;margin-right:5px;'>{port}</span>"
-            for port in open_ports
-        ])
-        st.markdown(
-            f"🟢 <b>{len(open_ports)} open ports:</b> {tag_html}",
-            unsafe_allow_html=True
-        )
+def render_port_risks(port_table):
+    for port, state, service, info in port_table:
+        if state == "open":
+            port_num = port.split('/')[0]
+            risk = PORT_RISK.get(port_num)
+            if risk:
+                st.markdown(
+                    f"<div style='margin:4px 0;padding:6px 12px;border-radius:7px;background:#fff3cd;color:#684d00;border:1px solid #ffe484;'><b>Risk on port {port_num}:</b> {risk}</div>",
+                    unsafe_allow_html=True
+                )
+
+def render_shodan_links(port_table, target):
+    for port, state, service, info in port_table:
+        if state == "open":
+            port_num = port.split('/')[0]
+            shodan_url = f"https://www.shodan.io/search?query={target}+port:{port_num}"
+            st.markdown(
+                f"[🌐 <b>Shodan: Search open {port_num}/tcp for {target}</b>]({shodan_url})",
+                unsafe_allow_html=True
+            )
 
 def vuln_links(port_table):
     for port, state, service, _ in port_table:
@@ -71,11 +88,28 @@ def vuln_links(port_table):
             portnum = port.split('/')[0]
             cve_url = f"https://www.exploit-db.com/portsearch?port={portnum}"
             st.markdown(
-                f"<a href='{cve_url}' target='_blank' style='text-decoration:none;'>🔗 <b>Check exploits for port {portnum}</b></a>",
+                f"[🛡️ ExploitDB/Port {portnum}](https://www.exploit-db.com/portsearch?port={portnum})",
                 unsafe_allow_html=True
             )
 
-# --- Gemini & YARA Core Class ---
+def export_results_md(scan_summary, port_table, details, raw):
+    md = f"# CyberSec Assistant Nmap Scan Report\n\n**Scan finished:** {scan_summary}\n\n"
+    if port_table:
+        md += "## Open Ports\n"
+        md += render_port_table(port_table)
+        md += "\n"
+        for port, state, service, info in port_table:
+            if details.get(port):
+                md += f"### Details for {port} ({service})\n```\n" + "\n".join(details[port]) + "\n```\n"
+    else:
+        md += "\nNo open ports detected.\n"
+    md += "\n## Raw Nmap Output\n```\n" + raw + "\n```\n"
+    return md
+
+def download_button_md(md, filename):
+    b64 = base64.b64encode(md.encode()).decode()
+    href = f'<a href="data:text/markdown;base64,{b64}" download="{filename}">⬇️ Download Results as Markdown</a>'
+    st.markdown(href, unsafe_allow_html=True)
 
 class EthicalHackingBot:
     def __init__(self):
@@ -93,9 +127,9 @@ class EthicalHackingBot:
             if not self.is_valid_target(target):
                 return {"error": "Invalid target. Please provide a valid IP or domain."}
             scan_commands = {
-                "basic": ["nmap", "-sn", target],                        # ping scan
-                "port_scan": ["nmap", "-sT", target],                    # TCP connect scan (no root needed)
-                "service_scan": ["nmap", "-sV", "-sC", target],          # version/service detection + default scripts
+                "basic": ["nmap", "-sn", target],
+                "port_scan": ["nmap", "-sT", target],
+                "service_scan": ["nmap", "-sV", "-sC", target],
             }
             if scan_type not in scan_commands:
                 return {"error": "Invalid scan type"}
@@ -160,8 +194,6 @@ Provide detailed, technical responses with practical examples when appropriate."
         except Exception as e:
             return f"Error getting AI response: {str(e)}"
 
-# --- Streamlit UI ---
-
 def main():
     st.markdown("""
     <div class="main-header">
@@ -194,11 +226,14 @@ def main():
         if st.button("Run Nmap Scan") and target:
             with st.spinner("Running scan..."):
                 result = st.session_state.bot.run_nmap_scan(target, scan_type)
+                # Scan history
+                if 'scan_history' not in st.session_state:
+                    st.session_state.scan_history = []
+                st.session_state.scan_history.append(result)
                 st.session_state.last_scan = result
 
     tab1, tab2, tab3 = st.tabs(["💬 Chat Assistant", "🔍 Scan Results", "📝 YARA Rules"])
 
-    # --- Tab 2: Scan Results ---
     with tab2:
         st.header("Scan Results")
         if 'last_scan' in st.session_state:
@@ -209,7 +244,10 @@ def main():
                 st.markdown(f"**Scan Command:** `{result.get('command', 'N/A')}`")
                 output = result.get('stdout', '')
                 scan_type = result.get("scan_type", "")
-                st.markdown(f"⏰ <b>Scan finished at:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", unsafe_allow_html=True)
+                scan_summary = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                st.markdown(f"⏰ <b>Scan finished at:</b> {scan_summary}", unsafe_allow_html=True)
+                # Port logic
+                port_table, details = parse_ports(output)
                 if scan_type == "basic":
                     if "Host is up" in output:
                         st.success("🎯 Host is **up and reachable!**")
@@ -218,35 +256,50 @@ def main():
                     else:
                         st.info(output)
                 else:
-                    port_table, details = parse_ports(output)
                     if port_table:
-                        render_port_tags(port_table)
                         st.markdown("#### Port Table")
                         st.markdown(render_port_table(port_table), unsafe_allow_html=True)
+                        # Premium: risks, shodan, cve
+                        render_port_risks(port_table)
+                        render_shodan_links(port_table, target)
                         vuln_links(port_table)
-                        # Expandable details
                         for port, state, service, info in port_table:
                             if details.get(port):
                                 with st.expander(f"📝 Details for {port} ({service})", expanded=False):
                                     st.code("\n".join(details[port]), language="text")
                     else:
                         st.warning("No open ports detected.")
-                    # Gemini AI summary
-                    if st.button("AI Insight (Pro)"):
-                        st.markdown("⌛ Gemini analyzing results...")
+                    # Timeline/history
+                    if 'scan_history' in st.session_state and len(st.session_state.scan_history) > 1:
+                        last_ports = set(
+                            p[0] for p in parse_ports(st.session_state.scan_history[-2].get('stdout',''))[0]
+                        )
+                        current_ports = set(p[0] for p in port_table)
+                        new_ports = current_ports - last_ports
+                        closed_ports = last_ports - current_ports
+                        if new_ports:
+                            st.info(f"🆕 <b>New open ports since last scan:</b> {', '.join(new_ports)}", unsafe_allow_html=True)
+                        if closed_ports:
+                            st.warning(f"❌ <b>Ports now closed:</b> {', '.join(closed_ports)}", unsafe_allow_html=True)
+                    # Auto AI Risk
+                    if st.session_state.bot.genai_client:
+                        st.markdown("#### AI Risk Summary")
                         ai = st.session_state.bot.get_ai_response(
-                            "Explain these nmap scan results in plain English for a non-technical user. Which ports are most interesting and why?",
+                            "Explain these nmap scan results in plain English for a non-technical user. Highlight risky ports and suggest actions.",
                             output
                         )
-                        st.markdown(ai)
-                # Raw output expander
+                        st.info(ai)
+                # Export button
+                if st.button("Export Scan Results"):
+                    md = export_results_md(scan_summary, port_table, details, output)
+                    download_button_md(md, f"scan_{scan_summary.replace(' ','_').replace(':','-')}.md")
+                # Raw output
                 st.markdown("---")
                 with st.expander("Raw Nmap Output"):
                     st.code(output, language="text")
         else:
             st.info("No scan results yet. Run a scan from the sidebar.")
 
-    # --- Tab 1: AI Chat ---
     with tab1:
         st.header("AI Security Assistant")
         if 'messages' not in st.session_state:
@@ -267,7 +320,6 @@ def main():
                     st.markdown(response)
                     st.session_state.messages.append({"role": "assistant", "content": response})
 
-    # --- Tab 3: YARA ---
     with tab3:
         st.header("YARA Rule Builder & File Scanner")
         yara_templates = {
