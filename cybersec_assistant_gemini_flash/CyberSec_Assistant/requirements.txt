@@ -3,5 +3,5 @@ python-nmap
 google-generativeai
 yara-python
 requests
-dnspython
+scapy
 python-whois
