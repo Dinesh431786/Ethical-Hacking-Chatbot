@@ -5,24 +5,41 @@ from datetime import datetime
 import yara
 
 st.set_page_config(page_title="CyberSec Assistant – Voxelta", page_icon="🛡️", layout="wide")
+
+# -- Branding Header --
 st.markdown("""
-    <div style="background: linear-gradient(90deg,#1e3c72 0%,#2a5298 100%);
-    padding:1.1rem 2rem;border-radius:10px;margin-bottom:2rem;">
-        <h2 style="color:#fff;margin-bottom:0;">🛡️ CyberSec Assistant</h2>
-        <div style="color:#ffe057;">by Voxelta Private Limited | 
-        <a style="color:#ffe057;text-decoration:underline;" href="https://www.linkedin.com/in/dinesh-k-3199ab1b0/" target="_blank">Dinesh K</a>
+    <div style="background: linear-gradient(90deg, #1e3c72 0%, #2a5298 100%);
+        padding:1.1rem 2rem 1.3rem 2rem; border-radius:10px;margin-bottom:2rem;box-shadow:0 4px 18px #1e3c7236;">
+        <h2 style="color:#fff;margin:0;">🛡️ CyberSec Assistant <span style="font-size:0.7em; font-weight:normal;">(by Voxelta Private Limited)</span></h2>
+        <div style="color:#ffe057;margin-top:6px;">
+            <b>For Security Pros, Students & Auditors</b> — 
+            <a style="color:#ffe057;" href="https://www.linkedin.com/in/dinesh-k-3199ab1b0/" target="_blank">Dinesh K</a>
         </div>
-        <div style="color:#e0e0e0;margin-bottom:0;font-size:1.1em;">AI-Powered Security & Recon Toolkit</div>
-    </div>
-""", unsafe_allow_html=True)
-st.markdown("""
-    <div style="background:#fff3cd;padding:1rem;border:1px solid #ffeaa7;border-radius:8px;">
-        <b>⚠️ For authorized security research and educational use only!</b><br>
-        Never scan or test targets without explicit permission.
+        <p style="color:#e0e0e0;margin:0;font-size:1.08em;">AI-Powered Recon & Vulnerability Toolkit — Beautiful, Powerful, Lightweight.</p>
     </div>
 """, unsafe_allow_html=True)
 
-# --- Gemini & Security Bot ---
+st.markdown("""
+    <div style="background:#fff3cd;padding:1rem 1.2rem;border:1px solid #ffeaa7;border-radius:8px;font-size:1em;">
+        <b>⚠️ For authorized security research & learning only!</b> Never scan/test targets without permission.
+    </div>
+""", unsafe_allow_html=True)
+st.write("")
+
+# --- Tool info tooltips ---
+TOOL_INFOS = {
+    "Nmap": "Nmap is a powerful network scanner for port discovery and service detection.",
+    "Nikto": "Nikto is a web server scanner for dangerous files and vulnerabilities.",
+    "XSStrike": "XSStrike tests URLs for XSS vulnerabilities with advanced payloads.",
+    "Hydra": "Hydra is a fast password brute-forcing tool for many services.",
+    "YARA": "YARA is a malware pattern/rule-based file scanner used in forensics."
+}
+
+# --- Session state ---
+if "history" not in st.session_state: st.session_state["history"] = []
+if "bot" not in st.session_state: st.session_state["bot"] = None
+
+# --- Gemini AI Bot Class ---
 class CyberBot:
     def __init__(self):
         self.genai_client = None
@@ -51,8 +68,7 @@ class CyberBot:
         except Exception as e:
             return f"Scan error: {e}"
 
-bot = st.session_state.setdefault('bot', CyberBot())
-
+# --- Util ---
 def tool_exists(tool):
     from shutil import which
     return which(tool) is not None
@@ -73,87 +89,120 @@ def nmap_scan_cmd(scan_type, target, custom_ports, custom_args):
     if scan_type == "Custom": return ["nmap"] + custom_args.split() + (["-p", custom_ports] if custom_ports else []) + [target]
     return ["nmap", target]
 
-# ---- Sidebar Tool Selection ----
+# -- Sidebar --
 with st.sidebar:
     st.header("🔑 Gemini & Tools")
-    gkey = st.text_input("Gemini API Key", type="password")
-    if gkey and not bot.genai_client:
-        if bot.init_gemini(gkey): st.success("Gemini Ready.")
-    batch_mode = st.checkbox("Batch Mode (run all)", value=False)
-    main_tools = ["Nmap", "Nikto", "XSStrike", "Hydra", "YARA"]
-    tool = st.selectbox("Single Tool", main_tools)
-    target = st.text_input("Target (IP/domain/url)", key="target")
-    # Nmap args
+    gkey = st.text_input("Gemini API Key", type="password", help="Paste your Gemini/Google Generative AI API key")
+    if gkey and not st.session_state["bot"]:
+        st.session_state["bot"] = CyberBot()
+        if st.session_state["bot"].init_gemini(gkey): st.success("Gemini Ready.")
+    bot = st.session_state["bot"] or CyberBot()
+    batch_mode = st.checkbox("Batch Mode (run all tools)", value=False)
+    tool = st.selectbox("Single Tool", ["Nmap", "Nikto", "XSStrike", "Hydra", "YARA"])
+    target = st.text_input("Target (IP/domain/url)", key="target", help="Enter a host, IP, or URL to scan.")
+
+    # Per-tool config
     if tool == "Nmap" or batch_mode:
         scan_type = st.selectbox("Nmap Scan Type", [
             "Basic Ping", "Top Ports", "All Ports", "Service Detection",
             "OS Detection", "Aggressive", "Custom"
-        ])
-        custom_ports = st.text_input("Nmap Ports (if any)", key="nmap_ports")
-        custom_args = st.text_input("Extra Args (if custom)", key="nmap_args")
-    # Hydra args
-    if tool == "Hydra" or batch_mode:
-        hydra_service = st.selectbox("Hydra Service", ["ssh", "ftp", "http-get", "rdp"], key="hydra_service")
-        hydra_user = st.text_input("Hydra Username", key="hydra_user")
-        hydra_wordlist = st.text_input("Hydra Wordlist", "/usr/share/wordlists/rockyou.txt", key="hydra_wordlist")
-    # Nikto
+        ], help=TOOL_INFOS["Nmap"])
+        custom_ports = st.text_input("Nmap Ports (if any)", key="nmap_ports", help="Comma-separated ports for custom scan.")
+        custom_args = st.text_input("Extra Args (if custom)", key="nmap_args", help="e.g., -A -O")
     if tool == "Nikto" or batch_mode:
-        nikto_args = st.text_input("Nikto Args", "", key="nikto_args")
-    # XSStrike
+        nikto_args = st.text_input("Nikto Args", "", key="nikto_args", help=TOOL_INFOS["Nikto"])
     if tool == "XSStrike" or batch_mode:
-        xs_args = st.text_input("XSStrike Args", "", key="xs_args")
+        xs_args = st.text_input("XSStrike Args", "", key="xs_args", help=TOOL_INFOS["XSStrike"])
+    if tool == "Hydra" or batch_mode:
+        hydra_service = st.selectbox("Hydra Service", ["ssh", "ftp", "http-get", "rdp"], key="hydra_service", help=TOOL_INFOS["Hydra"])
+        hydra_user = st.text_input("Hydra Username", key="hydra_user", help="Login username")
+        hydra_wordlist = st.text_input("Hydra Wordlist", "/usr/share/wordlists/rockyou.txt", key="hydra_wordlist", help="Path to passwords list")
 
-# ---- RUN BUTTON ----
-if st.button("🚀 Run Scan(s)"):
-    results = {}
-    if batch_mode and target:
-        # Nmap
-        nmap_cmd = nmap_scan_cmd(scan_type, target, custom_ports, custom_args)
-        results["Nmap"] = run_command(nmap_cmd)
-        # Nikto
-        results["Nikto"] = run_command(["nikto", "-h", target] + nikto_args.split())
-        # XSStrike
-        results["XSStrike"] = run_command(["python3", "XSStrike/xsstrike.py", "-u", target] + xs_args.split())
-        # Hydra
-        if hydra_user:
-            results["Hydra"] = run_command([
-                "hydra", "-l", hydra_user, "-P", hydra_wordlist, target, hydra_service
-            ])
-        for k, v in results.items():
-            st.markdown(f"### {k} Output")
-            st.code(v)
-            if bot.genai_client and st.checkbox(f"AI Analyze {k}", key=k):
-                st.markdown(bot.ai(v))
-    elif target:
-        if tool == "Nmap":
-            nmap_cmd = nmap_scan_cmd(scan_type, target, custom_ports, custom_args)
-            out = run_command(nmap_cmd)
-            st.code(out)
-            if bot.genai_client and st.checkbox("AI Analyze"):
-                st.markdown(bot.ai(out))
-        elif tool == "Nikto":
-            cmd = ["nikto", "-h", target] + nikto_args.split()
-            out = run_command(cmd)
-            st.code(out)
-            if bot.genai_client and st.checkbox("AI Analyze"):
-                st.markdown(bot.ai(out))
-        elif tool == "XSStrike":
-            cmd = ["python3", "XSStrike/xsstrike.py", "-u", target] + xs_args.split()
-            out = run_command(cmd)
-            st.code(out)
-            if bot.genai_client and st.checkbox("AI Analyze"):
-                st.markdown(bot.ai(out))
-        elif tool == "Hydra":
-            if hydra_user:
-                cmd = ["hydra", "-l", hydra_user, "-P", hydra_wordlist, target, hydra_service]
-                out = run_command(cmd)
+# -- Scan Action Panel --
+st.markdown("#### 🎛️ Tool Panel")
+st.info(TOOL_INFOS.get(tool, ""), icon="🔍")
+st.write("")
+
+scan_history = st.session_state["history"]
+
+def highlight_findings(out):
+    # Color critical findings (very basic regex, can be expanded)
+    critical = re.findall(r"(vulnerab|error|xss|found|critical|fail|open)", out, re.I)
+    if critical:
+        return f"<div style='background:#fff4f3;padding:0.7em;border-radius:5px;color:#c00;font-weight:bold;'>Findings: {'/'.join(set(critical))}</div>"
+    return ""
+
+def count_vulns(out):
+    c = len(re.findall(r"(vulnerab|CVE-|XSS|SQLi|open)", out, re.I))
+    return f"**Vulnerability/Findings count:** {c}" if c else "**No obvious findings detected.**"
+
+with st.container():
+    colL, colR = st.columns([3, 2])
+    with colL:
+        if st.button("🚀 Run Scan(s)", use_container_width=True):
+            results, timestamp = {}, datetime.now().strftime("%Y-%m-%d %H:%M")
+            # -- Batch Mode --
+            if batch_mode and target:
+                # Nmap
+                nmap_cmd = nmap_scan_cmd(scan_type, target, custom_ports, custom_args)
+                results["Nmap"] = run_command(nmap_cmd)
+                # Nikto
+                results["Nikto"] = run_command(["nikto", "-h", target] + nikto_args.split())
+                # XSStrike
+                results["XSStrike"] = run_command(["python3", "XSStrike/xsstrike.py", "-u", target] + xs_args.split())
+                # Hydra
+                if hydra_user:
+                    results["Hydra"] = run_command([
+                        "hydra", "-l", hydra_user, "-P", hydra_wordlist, target, hydra_service
+                    ])
+                # Save history
+                scan_history.append({"when": timestamp, "results": results, "target": target, "tools": list(results)})
+            # -- Single Tool --
+            elif target:
+                if tool == "Nmap":
+                    nmap_cmd = nmap_scan_cmd(scan_type, target, custom_ports, custom_args)
+                    out = run_command(nmap_cmd)
+                    results["Nmap"] = out
+                elif tool == "Nikto":
+                    cmd = ["nikto", "-h", target] + nikto_args.split()
+                    out = run_command(cmd)
+                    results["Nikto"] = out
+                elif tool == "XSStrike":
+                    cmd = ["python3", "XSStrike/xsstrike.py", "-u", target] + xs_args.split()
+                    out = run_command(cmd)
+                    results["XSStrike"] = out
+                elif tool == "Hydra" and hydra_user:
+                    cmd = ["hydra", "-l", hydra_user, "-P", hydra_wordlist, target, hydra_service]
+                    out = run_command(cmd)
+                    results["Hydra"] = out
+                scan_history.append({"when": timestamp, "results": results, "target": target, "tools": list(results)})
+            # -- Show Results
+            for tname, out in results.items():
+                st.markdown(f"#### {tname} Output")
                 st.code(out)
-                if bot.genai_client and st.checkbox("AI Analyze"):
-                    st.markdown(bot.ai(out))
-            else:
-                st.info("Hydra username required.")
+                st.markdown(count_vulns(out))
+                st.markdown(highlight_findings(out), unsafe_allow_html=True)
+                if bot.genai_client and st.toggle(f"AI Analyze {tname}", key=f"{tname}_ai"):
+                    st.success(bot.ai(out))
+            # -- Export/Download
+            scan_txt = "\n\n".join([f"{k}:\n{v}" for k,v in results.items()])
+            st.download_button("Download Results (.txt)", scan_txt, file_name=f"scan_{timestamp}.txt")
+    with colR:
+        if scan_history:
+            st.markdown("##### 📚 Session Scan History")
+            idx = st.selectbox("View Previous", options=list(range(len(scan_history))), format_func=lambda i: scan_history[i]['when'])
+            old = scan_history[idx]
+            for t, out in old["results"].items():
+                st.markdown(f"**{t} Output ({old['when']})**")
+                st.code(out)
+                st.markdown(count_vulns(out))
+                st.markdown(highlight_findings(out), unsafe_allow_html=True)
+                if bot.genai_client and st.toggle(f"AI Analyze {t} history", key=f"{t}_hist_ai"):
+                    st.success(bot.ai(out))
+            txt = "\n\n".join([f"{k}:\n{v}" for k,v in old["results"].items()])
+            st.download_button("Export History Results (.txt)", txt, file_name=f"scan_{old['when'].replace(':','-')}.txt")
 
-# ---- YARA Always Visible ----
+# --- YARA Always ---
 st.markdown("---\n### 📝 YARA Rule Builder & File Scanner")
 yara_templates = {
     "Suspicious String": '''rule suspicious_string_rule
@@ -184,7 +233,7 @@ selected_template = st.selectbox("YARA Rule Template", list(yara_templates.keys(
 rule_content = st.text_area(
     "YARA Rule",
     yara_templates[selected_template] if selected_template != "Custom (edit below)" else "",
-    height=300, key="yara_rule_box"
+    height=250, key="yara_rule_box"
 )
 col1, col2 = st.columns(2)
 with col1:
@@ -242,7 +291,7 @@ with st.expander("💬 Gemini AI Chat Assistant", expanded=False):
 
 st.markdown("---")
 st.markdown("""
-    <div style='text-align: center; color: #666; font-size: 0.96em;'>
+    <div style='text-align: center; color: #666; font-size: 0.98em;'>
         Made with ❤️ by <b>Voxelta Private Limited</b>.<br>
         <a href='https://www.linkedin.com/in/dinesh-k-3199ab1b0/' target='_blank'>Dinesh K on LinkedIn</a>
     </div>
