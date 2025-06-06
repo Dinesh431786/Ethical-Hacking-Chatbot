@@ -8,78 +8,49 @@ import tempfile
 from datetime import datetime
 import yara
 
-st.set_page_config(page_title="CyberSec Assistant", page_icon="🛡️", layout="wide")
-
-# --- Port Parsing and Display Functions ---
+st.set_page_config(
+    page_title="CyberSec Assistant",
+    page_icon="🛡️",
+    layout="wide"
+)
 
 def parse_ports(output):
-    port_table = []
-    details = {}
-    in_table = False
+    # Parse ports table from nmap output
     lines = output.splitlines()
-    current_port = None
-
-    for line in lines:
-        # Table header (start)
-        if line.strip().startswith("PORT "):
-            in_table = True
+    port_lines = []
+    details = {}
+    parsing = False
+    for i, line in enumerate(lines):
+        if re.match(r"^PORT\s+STATE\s+SERVICE", line):
+            parsing = True
             continue
-        if in_table:
-            # End table if not a port line
-            if not line.strip() or not re.match(r"^\d+/", line):
-                in_table = False
-                continue
-            parts = re.split(r'\s+', line, maxsplit=3)
+        if parsing and (not line.strip() or line.startswith("Nmap done")):
+            break
+        if parsing and line.strip():
+            parts = line.split()
             if len(parts) >= 3:
-                port, state, service = parts[:3]
-                info = parts[3] if len(parts) > 3 else ""
-                port_table.append([port, state, service, info])
+                port = parts[0]
+                state = parts[1].capitalize()
+                service = parts[2]
+                info = " ".join(parts[3:]) if len(parts) > 3 else ""
+                port_lines.append((port, state, service, info))
                 details[port] = []
-        # Add details (script output, banners) under ports
-        port_match = re.match(r"^(\d+/[a-z]+)", line)
-        if port_match:
-            current_port = port_match.group(1)
-        elif current_port and (line.strip().startswith('|') or line.strip().startswith('_')):
-            if current_port in details:
-                details[current_port].append(line.strip())
-    return port_table, details
+            elif port_lines:
+                details[port_lines[-1][0]].append(line.strip())
+    return port_lines, details
 
-def render_port_table(port_table):
-    if not port_table:
-        return "No open ports detected."
-    md = "|  | Port | State | Service | Info |\n|:-:|:-----|:------|:--------|:-----|\n"
-    for port, state, service, info in port_table:
-        color = "🟢" if state == "open" else ("🔴" if state == "closed" else "⚪")
-        md += f"| {color} | `{port}` | **{state.capitalize()}** | `{service}` | {info} |\n"
-    return md
-
-def render_port_tags(port_table):
-    open_ports = [f"{p[0]} ({p[2]})" for p in port_table if p[1] == "open"]
-    if open_ports:
-        tag_html = " ".join([
-            f"<span style='background:#16a34a;color:#fff;border-radius:6px;padding:3px 8px;margin-right:5px;'>{port}</span>"
-            for port in open_ports
-        ])
-        st.markdown(
-            f"🟢 <b>{len(open_ports)} open ports:</b> {tag_html}",
-            unsafe_allow_html=True
-        )
-
-def vuln_links(port_table):
-    for port, state, service, _ in port_table:
-        if state == "open":
-            portnum = port.split('/')[0]
-            cve_url = f"https://www.exploit-db.com/portsearch?port={portnum}"
-            st.markdown(
-                f"<a href='{cve_url}' target='_blank' style='text-decoration:none;'>🔗 <b>Check exploits for port {portnum}</b></a>",
-                unsafe_allow_html=True
-            )
-
-# --- Gemini & YARA Core Class ---
+def nmap_commands():
+    return {
+        "network_map": ["nmap", "-sn"],                 # Fast ping scan
+        "port_scan":   ["nmap", "-sT"],                 # TCP connect scan
+        "service_scan": ["nmap", "-sV", "-sC"],         # Service & version
+        "quick_host":  ["nmap", "-Pn"]                  # No ping, treat up
+    }
 
 class EthicalHackingBot:
     def __init__(self):
         self.genai_client = None
+
     def initialize_gemini(self, api_key):
         try:
             genai.configure(api_key=api_key)
@@ -88,29 +59,31 @@ class EthicalHackingBot:
         except Exception as e:
             st.error(f"Failed to initialize Gemini API: {str(e)}")
             return False
-    def run_nmap_scan(self, target, scan_type):
+
+    def run_nmap_scan(self, target, scan_type="network_map"):
+        cmd_map = nmap_commands()
+        if scan_type not in cmd_map:
+            return {"error": "Invalid scan type."}
+        command = cmd_map[scan_type] + [target]
         try:
-            if not self.is_valid_target(target):
-                return {"error": "Invalid target. Please provide a valid IP or domain."}
-            scan_commands = {
-                "basic": ["nmap", "-sn", target],                        # ping scan
-                "port_scan": ["nmap", "-sT", target],                    # TCP connect scan (no root needed)
-                "service_scan": ["nmap", "-sV", "-sC", target],          # version/service detection + default scripts
-            }
-            if scan_type not in scan_commands:
-                return {"error": "Invalid scan type"}
-            result = subprocess.run(scan_commands[scan_type], capture_output=True, text=True, timeout=180)
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=120
+            )
             return {
-                "command": " ".join(scan_commands[scan_type]),
+                "command": " ".join(command),
                 "stdout": result.stdout,
                 "stderr": result.stderr,
                 "returncode": result.returncode,
-                "scan_type": scan_type
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
         except subprocess.TimeoutExpired:
-            return {"error": "Scan timed out after 3 minutes"}
+            return {"error": "Scan timed out after 2 minutes"}
         except Exception as e:
             return {"error": f"Scan failed: {str(e)}"}
+
     def create_yara_rule(self, rule_content):
         try:
             yara.compile(source=rule_content)
@@ -119,6 +92,7 @@ class EthicalHackingBot:
             return {"status": "error", "message": f"YARA syntax error: {str(e)}"}
         except Exception as e:
             return {"status": "error", "message": f"Error: {str(e)}"}
+
     def scan_with_yara(self, file_path, rule_content):
         try:
             rules = yara.compile(source=rule_content)
@@ -137,30 +111,20 @@ class EthicalHackingBot:
             }
         except Exception as e:
             return {"status": "error", "message": f"Scan failed: {str(e)}"}
-    def is_valid_target(self, target):
-        ip_pattern = r'^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$'
-        domain_pattern = r'^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$'
-        return bool(re.match(ip_pattern, target) or re.match(domain_pattern, target))
+
     def get_ai_response(self, user_input, context=""):
         if not self.genai_client:
             return "Please configure your Gemini API key first."
         try:
             system_prompt = """You are a cybersecurity expert assistant focused on ethical hacking and security research.
-You provide guidance on:
-- Network reconnaissance and scanning
-- Vulnerability assessment
-- Malware analysis
-- Security best practices
-- Tool usage (nmap, YARA, etc.)
-Always emphasize ethical use and proper authorization. Never assist with illegal activities.
-Provide detailed, technical responses with practical examples when appropriate."""
+- You provide guidance on scanning, recon, vulnerabilities, security tools.
+- Always emphasize ethical use. Never assist with illegal activities.
+Provide technical responses with practical examples when appropriate."""
             full_prompt = f"{system_prompt}\n\nContext: {context}\n\nUser Query: {user_input}"
             response = self.genai_client.generate_content(full_prompt)
             return response.text
         except Exception as e:
             return f"Error getting AI response: {str(e)}"
-
-# --- Streamlit UI ---
 
 def main():
     st.markdown("""
@@ -169,84 +133,56 @@ def main():
         <p style="color: #e0e0e0; margin: 0;">Ethical Hacking & Security Research Tool</p>
     </div>
     """, unsafe_allow_html=True)
-
     st.markdown("""
     <div class="warning-box">
         <h4>⚠️ Ethical Use Only</h4>
         <p>This tool is designed for authorized security testing and research only.
-        Ensure you have proper permission before scanning any systems. Unauthorized
-        access to computer systems is illegal.</p>
+        Ensure you have proper permission before scanning any systems. Unauthorized access to computer systems is illegal.</p>
     </div>
     """, unsafe_allow_html=True)
 
     if 'bot' not in st.session_state:
         st.session_state.bot = EthicalHackingBot()
+    bot = st.session_state.bot
 
     with st.sidebar:
         st.header("Configuration")
         gemini_key = st.text_input("Gemini API Key", type="password")
-        if gemini_key and not st.session_state.bot.genai_client:
-            if st.session_state.bot.initialize_gemini(gemini_key):
+        if gemini_key and not bot.genai_client:
+            if bot.initialize_gemini(gemini_key):
                 st.success("Gemini API initialized!")
+
         st.header("Nmap Quick Scan")
-        target = st.text_input("Target (IP/Domain)", placeholder="192.168.1.1 or example.com")
-        scan_type = st.selectbox("Nmap Scan Type", ["basic", "port_scan", "service_scan"])
+        target = st.text_input("Target (IP/Domain)", "google.com")
+        scan_type = st.selectbox(
+            "Nmap Scan Type",
+            [
+                "network_map",     # Fastest
+                "port_scan",       # Fast, shows open ports
+                "service_scan",    # Slow, advanced info
+                "quick_host"       # No ping/Firewall Bypass
+            ],
+            format_func=lambda s: {
+                "network_map": "Network Map (Ping Scan)",
+                "port_scan": "Port Scan (Open Ports)",
+                "service_scan": "Service Scan (Version/Default Scripts)",
+                "quick_host": "No Ping/Firewall Bypass"
+            }[s]
+        )
         if st.button("Run Nmap Scan") and target:
             with st.spinner("Running scan..."):
-                result = st.session_state.bot.run_nmap_scan(target, scan_type)
+                result = bot.run_nmap_scan(target, scan_type)
+                if "scan_history" not in st.session_state:
+                    st.session_state.scan_history = []
+                st.session_state.scan_history.append({
+                    "scan_type": scan_type,
+                    "target": target,
+                    "result": result
+                })
                 st.session_state.last_scan = result
 
     tab1, tab2, tab3 = st.tabs(["💬 Chat Assistant", "🔍 Scan Results", "📝 YARA Rules"])
 
-    # --- Tab 2: Scan Results ---
-    with tab2:
-        st.header("Scan Results")
-        if 'last_scan' in st.session_state:
-            result = st.session_state.last_scan
-            if 'error' in result:
-                st.error(f"Scan Error: {result['error']}")
-            else:
-                st.markdown(f"**Scan Command:** `{result.get('command', 'N/A')}`")
-                output = result.get('stdout', '')
-                scan_type = result.get("scan_type", "")
-                st.markdown(f"⏰ <b>Scan finished at:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", unsafe_allow_html=True)
-                if scan_type == "basic":
-                    if "Host is up" in output:
-                        st.success("🎯 Host is **up and reachable!**")
-                    elif "Host seems down" in output:
-                        st.error("❌ Host is **down or unreachable.**")
-                    else:
-                        st.info(output)
-                else:
-                    port_table, details = parse_ports(output)
-                    if port_table:
-                        render_port_tags(port_table)
-                        st.markdown("#### Port Table")
-                        st.markdown(render_port_table(port_table), unsafe_allow_html=True)
-                        vuln_links(port_table)
-                        # Expandable details
-                        for port, state, service, info in port_table:
-                            if details.get(port):
-                                with st.expander(f"📝 Details for {port} ({service})", expanded=False):
-                                    st.code("\n".join(details[port]), language="text")
-                    else:
-                        st.warning("No open ports detected.")
-                    # Gemini AI summary
-                    if st.button("AI Insight (Pro)"):
-                        st.markdown("⌛ Gemini analyzing results...")
-                        ai = st.session_state.bot.get_ai_response(
-                            "Explain these nmap scan results in plain English for a non-technical user. Which ports are most interesting and why?",
-                            output
-                        )
-                        st.markdown(ai)
-                # Raw output expander
-                st.markdown("---")
-                with st.expander("Raw Nmap Output"):
-                    st.code(output, language="text")
-        else:
-            st.info("No scan results yet. Run a scan from the sidebar.")
-
-    # --- Tab 1: AI Chat ---
     with tab1:
         st.header("AI Security Assistant")
         if 'messages' not in st.session_state:
@@ -263,15 +199,59 @@ def main():
                     context = ""
                     if 'last_scan' in st.session_state:
                         context = f"Recent scan results: {json.dumps(st.session_state.last_scan, indent=2)}"
-                    response = st.session_state.bot.get_ai_response(prompt, context)
+                    response = bot.get_ai_response(prompt, context)
                     st.markdown(response)
                     st.session_state.messages.append({"role": "assistant", "content": response})
 
-    # --- Tab 3: YARA ---
+    with tab2:
+        st.header("Scan Results")
+        result = st.session_state.get("last_scan", None)
+        output = result.get("stdout", "") if result else ""
+        port_table, details = parse_ports(output) if output else ([], {})
+        st.markdown(f"**Scan Command:** `{result['command']}`" if result else "")
+        st.markdown(f"⏰ <b>Scan finished at:</b> {result.get('timestamp', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))}", unsafe_allow_html=True) if result else None
+
+        if port_table:
+            st.markdown("**Port Table**")
+            st.write("| Port | State | Service | Info |")
+            st.write("|------|-------|---------|------|")
+            for p in port_table:
+                port, state, service, info = p
+                status = "🟢" if state.lower() == "open" else "🔴"
+                st.write(f"| {status} {port} | {state} | {service} | {info} |")
+        elif result:
+            st.warning("No open ports detected.")
+
+        # Safe port history comparison
+        new_ports, closed_ports = set(), set()
+        if (
+            "scan_history" in st.session_state and
+            len(st.session_state.scan_history) > 1 and
+            port_table
+        ):
+            prev = st.session_state.scan_history[-2]
+            prev_ports, _ = parse_ports(prev["result"].get("stdout", ""))
+            prev_open = set([p[0] for p in prev_ports if p[1].lower() == "open"])
+            now_open = set([p[0] for p in port_table if p[1].lower() == "open"])
+            new_ports = now_open - prev_open
+            closed_ports = prev_open - now_open
+
+        if new_ports:
+            st.info(f"🆕 <b>New open ports since last scan:</b> {', '.join(new_ports)}", unsafe_allow_html=True)
+        if closed_ports:
+            st.warning(f"❌ <b>Ports now closed:</b> {', '.join(closed_ports)}", unsafe_allow_html=True)
+
+        if result:
+            st.markdown("<br><b>Full Nmap Output</b>", unsafe_allow_html=True)
+            st.code(output, language="text")
+        else:
+            st.info("No scan results yet. Run a scan from the sidebar.")
+
     with tab3:
         st.header("YARA Rule Builder & File Scanner")
-        yara_templates = {
-            "Suspicious String": '''rule suspicious_string_rule
+        rule_content = st.text_area(
+            "YARA Rule",
+            '''rule suspicious_string_rule
 {
     meta:
         description = "Detects suspicious string in files"
@@ -282,43 +262,27 @@ def main():
     condition:
         $string1
 }''' % datetime.now().strftime('%Y-%m-%d'),
-            "PE File (Windows EXE)": '''rule pe_file_rule
-{
-    meta:
-        description = "Detects PE executable files"
-        author = "CyberSec Assistant"
-        date = "%s"
-    strings:
-        $mz = { 4D 5A }
-    condition:
-        $mz at 0
-}''' % datetime.now().strftime('%Y-%m-%d'),
-            "Custom (edit below)": ""
-        }
-        selected_template = st.selectbox("YARA Rule Template", list(yara_templates.keys()))
-        rule_content = st.text_area(
-            "YARA Rule",
-            yara_templates[selected_template] if selected_template != "Custom (edit below)" else "",
             height=300,
-            key="rule_editor"
         )
+
         col1, col2 = st.columns(2)
         with col1:
             if st.button("Validate Rule"):
-                result = st.session_state.bot.create_yara_rule(rule_content)
+                result = bot.create_yara_rule(rule_content)
                 if result['status'] == 'success':
                     st.success(result['message'])
                 else:
                     st.error(result['message'])
             if st.button("Explain Rule with Gemini AI"):
-                if st.session_state.bot.genai_client:
-                    ai_response = st.session_state.bot.get_ai_response(
+                if bot.genai_client:
+                    ai_response = bot.get_ai_response(
                         "Explain this YARA rule and what it is designed to detect:",
                         rule_content
                     )
                     st.markdown(ai_response)
                 else:
                     st.warning("Configure Gemini API first.")
+
         with col2:
             uploaded_files = st.file_uploader(
                 "Upload files to scan", type=['exe', 'dll', 'pdf', 'doc', 'txt'],
@@ -326,16 +290,14 @@ def main():
             )
             if uploaded_files and rule_content:
                 if st.button("Scan Files"):
-                    matches_found = False
                     for uploaded_file in uploaded_files:
                         with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
                             tmp_file.write(uploaded_file.read())
                             tmp_path = tmp_file.name
                         try:
-                            result = st.session_state.bot.scan_with_yara(tmp_path, rule_content)
+                            result = bot.scan_with_yara(tmp_path, rule_content)
                             if result['status'] == 'success':
                                 if result['matches']:
-                                    matches_found = True
                                     st.success(f"Matches in `{uploaded_file.name}`:")
                                     for match in result['matches']:
                                         st.write(f"**Rule:** `{match['rule']}`")
@@ -354,8 +316,6 @@ def main():
                                 st.error(f"Scan failed for `{uploaded_file.name}`: {result['message']}")
                         finally:
                             os.unlink(tmp_path)
-                    if not matches_found:
-                        st.warning("No matches found in any files.")
 
     st.markdown("---")
     st.markdown("""
