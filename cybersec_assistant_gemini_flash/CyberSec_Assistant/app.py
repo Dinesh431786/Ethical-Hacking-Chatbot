@@ -137,7 +137,7 @@ class EthicalHackingBot:
 
     def get_ai_response(self, user_input, context=""):
         if not self.genai_client:
-            return "Please configure your Gemini API key first."
+            return None  # Not available!
         try:
             full_prompt = f"""You are a world-class penetration tester and cybersecurity analyst. 
 Given this scan result, provide a detailed, professional summary for a bug bounty or audit report. 
@@ -152,7 +152,7 @@ User Query:
             response = self.genai_client.generate_content(full_prompt)
             return response.text
         except Exception as e:
-            return f"Error getting AI response: {str(e)}"
+            return None
 
     def get_port_risk(self, port, state, service, info, host, context=""):
         if not self.genai_client:
@@ -236,9 +236,12 @@ def main():
                     context = ""
                     if 'last_scan' in st.session_state:
                         context = f"Recent scan results: {json.dumps(st.session_state.last_scan['result'], indent=2)}"
-                    response = bot.get_ai_response(prompt, context)
-                    st.markdown(response)
-                    st.session_state.messages.append({"role": "assistant", "content": response})
+                    ai_response = bot.get_ai_response(prompt, context) if bot.genai_client else None
+                    if ai_response:
+                        st.markdown(ai_response)
+                        st.session_state.messages.append({"role": "assistant", "content": ai_response})
+                    else:
+                        st.markdown("*[Gemini AI not configured. No assistant output.]*")
 
     with tab2:
         st.header("Scan Results")
@@ -251,12 +254,14 @@ def main():
             st.markdown(f"⏰ <b>Scan finished at:</b> {scan_time}", unsafe_allow_html=True)
             nmap_output = result.get("stdout", "")
             port_table, port_details = parse_ports(nmap_output)
-            # AI Summary (main scan)
+            # AI Summary (main scan) only if API is configured
+            ai_summary = None
             if bot.genai_client:
                 ai_summary = bot.get_ai_response(
                     "Provide a professional, concise summary (in 2-4 bullet points, plus next steps) for this scan.",
                     nmap_output
                 )
+            if ai_summary:
                 st.markdown(f"#### <span style='color:#1e3c72'>Gemini Pro Security Summary</span>", unsafe_allow_html=True)
                 st.info(ai_summary)
             # Port Table (with per-port risk)
@@ -264,7 +269,12 @@ def main():
                 port_data = []
                 for p in port_table:
                     color = "🟢" if p[1].lower() == "open" else "🔴"
-                    port_risk = bot.get_port_risk(p[0], p[1], p[2], p[3], target, nmap_output) if bot.genai_client and p[1].lower() == "open" else ""
+                    port_risk = ""
+                    if bot.genai_client and p[1].lower() == "open":
+                        try:
+                            port_risk = bot.get_port_risk(p[0], p[1], p[2], p[3], target, nmap_output)
+                        except Exception:
+                            port_risk = ""
                     port_data.append({
                         "Port": f"{color} {p[0]}",
                         "State": p[1],
@@ -272,7 +282,7 @@ def main():
                         "Info": p[3],
                         "AI Risk Summary": port_risk
                     })
-                st.markdown("**Port Table (with AI insights)**")
+                st.markdown("**Port Table (with AI insights)**" if bot.genai_client else "**Port Table**")
                 st.table(pd.DataFrame(port_data, columns=["Port", "State", "Service", "Info", "AI Risk Summary"]))
                 for port, details in port_details.items():
                     if details:
