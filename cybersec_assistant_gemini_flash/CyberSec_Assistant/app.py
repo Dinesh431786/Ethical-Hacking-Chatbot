@@ -11,40 +11,29 @@ import socket
 
 # --------- Parsing Helpers ---------
 def parse_ports(nmap_output):
-    """
-    Parse ports/services from nmap output into table and details.
-    Returns: (port_table, details_dict)
-    """
     port_table = []
     details = {}
     lines = nmap_output.splitlines()
     capture = False
-    for idx, line in enumerate(lines):
-        # Nmap output usually has PORT STATE SERVICE as the header
+    for line in lines:
         if re.match(r"PORT\s+STATE\s+SERVICE", line):
             capture = True
             continue
         if capture:
             if not line.strip() or line.startswith("Nmap done"):
                 break
-            # Split line into PORT, STATE, SERVICE, INFO (if present)
             fields = re.split(r"\s+", line, maxsplit=3)
             if len(fields) >= 3:
                 port, state, service = fields[:3]
                 info = fields[3] if len(fields) == 4 else ""
                 port_table.append([port, state, service, info])
                 details[port] = []
-        # Capture extra details (indented, after port lines)
         elif port_table and (line.startswith("|") or line.startswith("_") or line.startswith("SF-")):
-            # Assign to last port in table
             last_port = port_table[-1][0]
             details[last_port].append(line.strip())
     return port_table, details
 
 def parse_network_map(nmap_output):
-    """
-    Parse `nmap -sn` output for discovered hosts.
-    """
     hosts = []
     host = {}
     for line in nmap_output.splitlines():
@@ -67,9 +56,6 @@ def parse_network_map(nmap_output):
     return hosts
 
 def get_gemini_risk(genai_client, port_table, details, target):
-    """
-    Ask Gemini for a summary of potential risks given ports/services.
-    """
     port_lines = "\n".join([f"{p[0]}: {p[1]}, {p[2]}, {p[3]}" for p in port_table])
     prompt = f"""
 You are a professional cybersecurity assistant.
@@ -86,11 +72,9 @@ Details:
     except Exception as e:
         return f"Gemini API error: {str(e)}"
 
-# --------- Core Nmap Scan Wrapper ---------
 class EthicalHackingBot:
     def __init__(self):
         self.genai_client = None
-        self.conversation_history = []
 
     def initialize_gemini(self, api_key):
         try:
@@ -103,9 +87,9 @@ class EthicalHackingBot:
 
     def run_nmap(self, target, scan_type="port_scan"):
         scan_map = {
-            "network_map": ["nmap", "-sn", target],                   # Fastest ping scan
-            "port_scan": ["nmap", "-sT", target],                     # Full TCP connect scan (safe)
-            "service_scan": ["nmap", "-sV", "-sC", target],           # Service/version + default scripts
+            "network_map": ["nmap", "-sn", target],
+            "port_scan": ["nmap", "-sT", target],
+            "service_scan": ["nmap", "-sV", "-sC", target],
         }
         cmd = scan_map.get(scan_type, scan_map["port_scan"])
         try:
@@ -123,8 +107,6 @@ class EthicalHackingBot:
             return {"error": "Scan timed out after 2 minutes"}
         except Exception as e:
             return {"error": f"Scan failed: {str(e)}"}
-
-    # YARA related code unchanged (add if you want to use the YARA section)
 
     def get_ai_response(self, user_input, context=""):
         if not self.genai_client:
@@ -146,7 +128,6 @@ Provide detailed, technical responses with practical examples when appropriate."
         except Exception as e:
             return f"Error getting AI response: {str(e)}"
 
-# ------------- MAIN APP ----------------
 def main():
     st.markdown("""
     <div class="main-header">
@@ -187,7 +168,6 @@ def main():
             with st.spinner("Running nmap scan..."):
                 result = bot.run_nmap(target, scan_type)
                 if "stdout" in result:
-                    # Save history for port diff
                     if "scan_history" not in st.session_state:
                         st.session_state.scan_history = []
                     st.session_state.scan_history.append({
@@ -236,6 +216,8 @@ def main():
             st.markdown(f"**Scan Command:** `{last['command']}`")
             st.markdown(f"⏰ <b>Scan finished at:</b> {last['finished']}", unsafe_allow_html=True)
             scan_type_code = last["command"].split()[1]
+            # Defensive: Only define these if a port scan/service scan
+            port_table, details = [], {}
             if scan_type_code == "-sn":
                 hosts = parse_network_map(last["stdout"])
                 st.markdown("<b>Discovered Hosts:</b>", unsafe_allow_html=True)
@@ -261,31 +243,28 @@ def main():
                         f"<table><tr><th></th><th>Port</th><th>State</th><th>Service</th><th>Info</th></tr>{port_rows}</table>",
                         unsafe_allow_html=True,
                     )
-                    # Collapsible details for each port
                     for port, data in details.items():
                         if data:
                             with st.expander(f"Show details for {port}"):
                                 st.markdown("\n".join(data))
                     open_ports = [p[0] for p in port_table if p[1].lower() == "open"]
                     st.markdown(f"<b>{len(open_ports)} open ports:</b> {', '.join(open_ports)}", unsafe_allow_html=True)
-                    # Gemini Risk Analysis
-                    if bot.genai_client:
+                    # Gemini Risk Analysis (safe: only if ports exist)
+                    if bot.genai_client and port_table:
                         if st.button("AI: Summarize Security Risk", key="risk"):
                             with st.spinner("Gemini analyzing..."):
                                 ai_out = get_gemini_risk(bot.genai_client, port_table, details, target)
                                 st.markdown(ai_out)
 
-                # === SAFE PORT DIFF ONLY IF BOTH SCANS HAVE PORTS ===
-                if (
-                    "scan_history" in st.session_state and
-                    len(st.session_state.scan_history) > 1 and
-                    scan_type_code in ("-sT", "-sV")
-                ):
-                    prev = st.session_state.scan_history[-2]
-                    prev_code = prev["result"]["command"].split()[1]
-                    # Only compare if both previous and current scans are port/service scans
-                    if prev_code in ("-sT", "-sV"):
-                        prev_ports, _ = parse_ports(prev["result"].get("stdout", ""))
+                    # Port diffing: only if current/previous scans BOTH found ports
+                    if (
+                        "scan_history" in st.session_state and
+                        len(st.session_state.scan_history) > 1 and
+                        scan_type_code in ("-sT", "-sV") and port_table
+                    ):
+                        prev = st.session_state.scan_history[-2]
+                        prev_code = prev["result"]["command"].split()[1]
+                        prev_ports, _ = parse_ports(prev["result"].get("stdout", "")) if prev_code in ("-sT", "-sV") else ([], {})
                         prev_open = set([p[0] for p in prev_ports if p[1].lower() == "open"])
                         now_open = set([p[0] for p in port_table if p[1].lower() == "open"])
                         new_ports = now_open - prev_open
@@ -294,8 +273,6 @@ def main():
                             st.info(f"🆕 <b>New open ports since last scan:</b> {', '.join(new_ports)}", unsafe_allow_html=True)
                         if closed_ports:
                             st.warning(f"❌ <b>Ports now closed:</b> {', '.join(closed_ports)}", unsafe_allow_html=True)
-                    else:
-                        st.info("Previous scan was not a port/service scan, skipping port diff.")
 
             st.markdown("<h6>Full Nmap Output</h6>", unsafe_allow_html=True)
             st.code(last["stdout"], language="text")
