@@ -65,22 +65,6 @@ def extract_port_table(output):
             port_lines.append(line)
     return port_lines
 
-def highlight_ports_table(port_lines):
-    """Add green dot to 'open' ports and format as Markdown."""
-    pretty = []
-    if not port_lines:
-        return ""
-    header = port_lines[0]
-    pretty.append(f"**`{header}`**")
-    for line in port_lines[1:]:
-        if "open" in line:
-            pretty.append(f":green_circle: `{line}`")
-        elif "closed" in line or "filtered" in line:
-            pretty.append(f":red_circle: `{line}`")
-        else:
-            pretty.append(f"`{line}`")
-    return "\n".join(pretty)
-
 class EthicalHackingBot:
     def __init__(self):
         self.genai_client = None
@@ -179,6 +163,40 @@ Provide detailed, technical responses with practical examples when appropriate."
         except Exception as e:
             return f"Error getting AI response: {str(e)}"
 
+def advanced_nmap_output(stdout):
+    clean_output = clean_nmap_output(stdout)
+    port_lines = extract_port_table(clean_output)
+    extra_lines = []
+    if port_lines:
+        all_lines = clean_output.splitlines()
+        try:
+            idx = all_lines.index(port_lines[-1]) + 1
+            extra_lines = all_lines[idx:]
+        except ValueError:
+            extra_lines = []
+
+    # Group extra info per port
+    ports = []
+    port_details = {}
+    current_port = None
+    for line in port_lines[1:]:
+        m = re.match(r"^(\d+/[a-z]+)\s+(\w+)\s+([^\s]+)(.*)", line)
+        if m:
+            port = m.group(1)
+            ports.append(port)
+            port_details[port] = {"line": line, "details": []}
+            current_port = port
+    # Attach lines from extra_lines to correct port
+    for line in extra_lines:
+        port_match = re.match(r"^(\d+/[a-z]+)", line)
+        if port_match and port_match.group(1) in port_details:
+            current_port = port_match.group(1)
+            continue
+        if current_port:
+            port_details[current_port]["details"].append(line)
+
+    return ports, port_details
+
 def main():
     st.markdown("""
     <div class="main-header">
@@ -246,29 +264,24 @@ def main():
             if 'error' in result:
                 st.error(f"Scan Error: {result['error']}")
             else:
-                st.markdown(f"**Command:** `{result.get('command', 'N/A')}`")
+                st.markdown(f"**Scan Command:** `{result.get('command', 'N/A')}`")
                 if result.get('stdout'):
-                    st.markdown("### :rocket: **Open Ports & Services**")
-                    clean_output = clean_nmap_output(result['stdout'])
-                    port_lines = extract_port_table(clean_output)
-                    if port_lines:
-                        st.markdown(highlight_ports_table(port_lines))
-                        open_ports = [line for line in port_lines[1:] if "open" in line]
-                        st.info(f"**{len(open_ports)} open ports found.**")
-                    else:
-                        st.warning("No ports found in the scan.")
-                    # Advanced/script output in expander
-                    extra_lines = []
-                    if port_lines:
-                        all_lines = clean_output.splitlines()
-                        try:
-                            idx = all_lines.index(port_lines[-1]) + 1
-                            extra_lines = all_lines[idx:]
-                        except ValueError:
-                            extra_lines = []
-                    if extra_lines:
-                        with st.expander("Show full advanced scan output (for experts)", expanded=False):
-                            st.code("\n".join(extra_lines), language="text")
+                    ports, port_details = advanced_nmap_output(result['stdout'])
+                    st.markdown("### :rocket: **Advanced Port & Service Details**")
+                    open_count = 0
+                    for port in ports:
+                        line = port_details[port]["line"]
+                        is_open = "open" in line
+                        icon = ":green_circle:" if is_open else (":red_circle:" if "closed" in line or "filtered" in line else ":white_circle:")
+                        if is_open:
+                            open_count += 1
+                        st.markdown(f"{icon} `{line}`")
+                        details = port_details[port]["details"]
+                        if details:
+                            with st.expander(f"Details for {port}", expanded=False):
+                                st.code("\n".join(details), language="text")
+                    st.success(f"**{open_count} open ports found.**")
+                    st.caption(f"Scan finished at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
                 if result.get('stderr'):
                     st.markdown("**Errors:**")
                     st.code(result['stderr'], language='text')
@@ -385,4 +398,7 @@ def main():
         <p>🛡️ CyberSec Assistant - For Ethical Security Research Only</p>
         <p>Always ensure proper authorization before testing systems</p>
     </div>
-   
+    """, unsafe_allow_html=True)
+
+if __name__ == "__main__":
+    main()
