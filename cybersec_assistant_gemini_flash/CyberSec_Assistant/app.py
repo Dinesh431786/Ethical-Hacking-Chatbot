@@ -5,39 +5,24 @@ from datetime import datetime
 import yara
 
 st.set_page_config(page_title="CyberSec Assistant – Voxelta", page_icon="🛡️", layout="wide")
+st.markdown("""
+    <div style="background: linear-gradient(90deg,#1e3c72 0%,#2a5298 100%);
+    padding:1.1rem 2rem;border-radius:10px;margin-bottom:2rem;">
+        <h2 style="color:#fff;margin-bottom:0;">🛡️ CyberSec Assistant</h2>
+        <div style="color:#ffe057;">by Voxelta Private Limited | 
+        <a style="color:#ffe057;text-decoration:underline;" href="https://www.linkedin.com/in/dinesh-k-3199ab1b0/" target="_blank">Dinesh K</a>
+        </div>
+        <div style="color:#e0e0e0;margin-bottom:0;font-size:1.1em;">AI-Powered Security & Recon Toolkit</div>
+    </div>
+""", unsafe_allow_html=True)
+st.markdown("""
+    <div style="background:#fff3cd;padding:1rem;border:1px solid #ffeaa7;border-radius:8px;">
+        <b>⚠️ For authorized security research and educational use only!</b><br>
+        Never scan or test targets without explicit permission.
+    </div>
+""", unsafe_allow_html=True)
 
-# -- Helper Functions --
-def tool_exists(tool):  # Simple binary check
-    from shutil import which
-    return which(tool) is not None
-
-def run_command(cmd, timeout=300):
-    try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout).stdout
-    except Exception as e:
-        return f"Error: {e}"
-
-def ai_summary(bot, txt):  # Short Gemini summary
-    return bot.ai(f"Summarize, explain, and give next steps:\n{txt}") if bot.genai_client else ""
-
-def parse_scan_type(scan_type, target, custom_ports, custom_args):
-    if scan_type == "Basic Ping":
-        return ["nmap", "-sn", target]
-    if scan_type == "Top Ports":
-        return ["nmap", "-T4", "-F", target]
-    if scan_type == "All Ports":
-        return ["nmap", "-p-", target]
-    if scan_type == "Service Detection":
-        return ["nmap", "-sV", "-T4", target]
-    if scan_type == "OS Detection":
-        return ["nmap", "-O", target]
-    if scan_type == "Aggressive":
-        return ["nmap", "-A", "-T4", target]
-    if scan_type == "Custom":
-        return ["nmap"] + custom_args.split() + (["-p", custom_ports] if custom_ports else []) + [target]
-    return ["nmap", target]
-
-# -- Bot Class --
+# --- Gemini & Security Bot ---
 class CyberBot:
     def __init__(self):
         self.genai_client = None
@@ -68,110 +53,107 @@ class CyberBot:
 
 bot = st.session_state.setdefault('bot', CyberBot())
 
-# -- Sidebar: Tool & Scan Selection --
+def tool_exists(tool):
+    from shutil import which
+    return which(tool) is not None
+
+def run_command(cmd, timeout=300):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout).stdout
+    except Exception as e:
+        return f"Error: {e}"
+
+def nmap_scan_cmd(scan_type, target, custom_ports, custom_args):
+    if scan_type == "Basic Ping": return ["nmap", "-sn", target]
+    if scan_type == "Top Ports": return ["nmap", "-T4", "-F", target]
+    if scan_type == "All Ports": return ["nmap", "-p-", target]
+    if scan_type == "Service Detection": return ["nmap", "-sV", "-T4", target]
+    if scan_type == "OS Detection": return ["nmap", "-O", target]
+    if scan_type == "Aggressive": return ["nmap", "-A", "-T4", target]
+    if scan_type == "Custom": return ["nmap"] + custom_args.split() + (["-p", custom_ports] if custom_ports else []) + [target]
+    return ["nmap", target]
+
+# ---- Sidebar Tool Selection ----
 with st.sidebar:
-    st.header("🔑 Gemini API & Tool Selection")
+    st.header("🔑 Gemini & Tools")
     gkey = st.text_input("Gemini API Key", type="password")
     if gkey and not bot.genai_client:
         if bot.init_gemini(gkey): st.success("Gemini Ready.")
-    batch_mode = st.checkbox("Batch Mode (all tools)", value=False)
-    main_tools = [
-        "Nmap", "Nikto", "XSStrike", "Hydra", "Subfinder", "theHarvester", "YARA"
-    ]
+    batch_mode = st.checkbox("Batch Mode (run all)", value=False)
+    main_tools = ["Nmap", "Nikto", "XSStrike", "Hydra", "YARA"]
     tool = st.selectbox("Single Tool", main_tools)
-    target = st.text_input("Target (IP/domain/url/email)", key="target")
+    target = st.text_input("Target (IP/domain/url)", key="target")
+    # Nmap args
+    if tool == "Nmap" or batch_mode:
+        scan_type = st.selectbox("Nmap Scan Type", [
+            "Basic Ping", "Top Ports", "All Ports", "Service Detection",
+            "OS Detection", "Aggressive", "Custom"
+        ])
+        custom_ports = st.text_input("Nmap Ports (if any)", key="nmap_ports")
+        custom_args = st.text_input("Extra Args (if custom)", key="nmap_args")
+    # Hydra args
+    if tool == "Hydra" or batch_mode:
+        hydra_service = st.selectbox("Hydra Service", ["ssh", "ftp", "http-get", "rdp"], key="hydra_service")
+        hydra_user = st.text_input("Hydra Username", key="hydra_user")
+        hydra_wordlist = st.text_input("Hydra Wordlist", "/usr/share/wordlists/rockyou.txt", key="hydra_wordlist")
+    # Nikto
+    if tool == "Nikto" or batch_mode:
+        nikto_args = st.text_input("Nikto Args", "", key="nikto_args")
+    # XSStrike
+    if tool == "XSStrike" or batch_mode:
+        xs_args = st.text_input("XSStrike Args", "", key="xs_args")
 
-# -- Arguments Per Tool --
-args = {}
-if tool == "Nmap" or batch_mode:
-    scan_type = st.selectbox("Nmap Scan Type", [
-        "Basic Ping", "Top Ports", "All Ports", "Service Detection",
-        "OS Detection", "Aggressive", "Custom"
-    ])
-    custom_ports = st.text_input("Custom Ports (if any)", key="nmap_ports")
-    custom_args = st.text_input("Extra Args (if custom)", key="nmap_args")
-    args['Nmap'] = (scan_type, custom_ports, custom_args)
-if tool == "Nikto" or batch_mode:
-    args['Nikto'] = st.text_input("Nikto Args", "", key="nikto_args")
-if tool == "XSStrike" or batch_mode:
-    args['XSStrike'] = st.text_input("XSStrike Args", "", key="xsstrike_args")
-if tool == "Hydra" or batch_mode:
-    hydra_service = st.selectbox("Hydra Service", ["ssh", "ftp", "http-get", "rdp"], key="hydra_service")
-    hydra_user = st.text_input("Hydra Username", key="hydra_user")
-    hydra_wordlist = st.text_input("Hydra Wordlist", "/usr/share/wordlists/rockyou.txt", key="hydra_wordlist")
-    args['Hydra'] = (hydra_service, hydra_user, hydra_wordlist)
-if tool == "Subfinder" or batch_mode:
-    args['Subfinder'] = st.text_input("Subfinder Args", "", key="subfinder_args")
-if tool == "theHarvester" or batch_mode:
-    args['theHarvester'] = st.text_input("theHarvester Args", "-b all -l 20", key="harvester_args")
-
-# -- Batch and Single Mode Scan Buttons --
+# ---- RUN BUTTON ----
 if st.button("🚀 Run Scan(s)"):
-    outputs = {}
+    results = {}
     if batch_mode and target:
         # Nmap
-        scan_type, custom_ports, custom_args = args['Nmap']
-        nmap_cmd = parse_scan_type(scan_type, target, custom_ports, custom_args)
-        outputs['Nmap'] = run_command(nmap_cmd)
+        nmap_cmd = nmap_scan_cmd(scan_type, target, custom_ports, custom_args)
+        results["Nmap"] = run_command(nmap_cmd)
         # Nikto
-        outputs['Nikto'] = run_command(["nikto", "-h", target] + args['Nikto'].split())
+        results["Nikto"] = run_command(["nikto", "-h", target] + nikto_args.split())
         # XSStrike
-        outputs['XSStrike'] = run_command(["python3", "XSStrike/xsstrike.py", "-u", target] + args['XSStrike'].split())
-        # Hydra (optional, needs valid username/wordlist/service)
-        if args['Hydra'][1]:
-            outputs['Hydra'] = run_command(["hydra", "-l", args['Hydra'][1], "-P", args['Hydra'][2], f"{target}", args['Hydra'][0]])
-        # Subfinder
-        outputs['Subfinder'] = run_command(["subfinder", "-d", target] + args['Subfinder'].split())
-        # theHarvester
-        outputs['theHarvester'] = run_command(["theHarvester", "-d", target] + args['theHarvester'].split())
-        # Show all
-        for k, v in outputs.items():
+        results["XSStrike"] = run_command(["python3", "XSStrike/xsstrike.py", "-u", target] + xs_args.split())
+        # Hydra
+        if hydra_user:
+            results["Hydra"] = run_command([
+                "hydra", "-l", hydra_user, "-P", hydra_wordlist, target, hydra_service
+            ])
+        for k, v in results.items():
             st.markdown(f"### {k} Output")
             st.code(v)
             if bot.genai_client and st.checkbox(f"AI Analyze {k}", key=k):
-                st.markdown(ai_summary(bot, v))
+                st.markdown(bot.ai(v))
     elif target:
         if tool == "Nmap":
-            scan_type, custom_ports, custom_args = args['Nmap']
-            cmd = parse_scan_type(scan_type, target, custom_ports, custom_args)
-            out = run_command(cmd)
+            nmap_cmd = nmap_scan_cmd(scan_type, target, custom_ports, custom_args)
+            out = run_command(nmap_cmd)
             st.code(out)
             if bot.genai_client and st.checkbox("AI Analyze"):
-                st.markdown(ai_summary(bot, out))
+                st.markdown(bot.ai(out))
         elif tool == "Nikto":
-            cmd = ["nikto", "-h", target] + args['Nikto'].split()
+            cmd = ["nikto", "-h", target] + nikto_args.split()
             out = run_command(cmd)
             st.code(out)
             if bot.genai_client and st.checkbox("AI Analyze"):
-                st.markdown(ai_summary(bot, out))
+                st.markdown(bot.ai(out))
         elif tool == "XSStrike":
-            cmd = ["python3", "XSStrike/xsstrike.py", "-u", target] + args['XSStrike'].split()
+            cmd = ["python3", "XSStrike/xsstrike.py", "-u", target] + xs_args.split()
             out = run_command(cmd)
             st.code(out)
             if bot.genai_client and st.checkbox("AI Analyze"):
-                st.markdown(ai_summary(bot, out))
+                st.markdown(bot.ai(out))
         elif tool == "Hydra":
-            hydra_service, hydra_user, hydra_wordlist = args['Hydra']
             if hydra_user:
                 cmd = ["hydra", "-l", hydra_user, "-P", hydra_wordlist, target, hydra_service]
                 out = run_command(cmd)
                 st.code(out)
                 if bot.genai_client and st.checkbox("AI Analyze"):
-                    st.markdown(ai_summary(bot, out))
+                    st.markdown(bot.ai(out))
             else:
                 st.info("Hydra username required.")
-        elif tool == "Subfinder":
-            cmd = ["subfinder", "-d", target] + args['Subfinder'].split()
-            out = run_command(cmd)
-            st.code(out)
-        elif tool == "theHarvester":
-            cmd = ["theHarvester", "-d", target] + args['theHarvester'].split()
-            out = run_command(cmd)
-            st.code(out)
-        elif tool == "YARA":
-            pass  # below
 
-# --- YARA tab always available ---
+# ---- YARA Always Visible ----
 st.markdown("---\n### 📝 YARA Rule Builder & File Scanner")
 yara_templates = {
     "Suspicious String": '''rule suspicious_string_rule
@@ -256,7 +238,7 @@ with st.expander("💬 Gemini AI Chat Assistant", expanded=False):
             with st.spinner("AI is thinking..."):
                 resp = bot.ai(prompt)
                 st.markdown(resp)
-                st.session_state.messages.append({"role": "assistant", "content": resp)
+                st.session_state.messages.append({"role": "assistant", "content": resp})
 
 st.markdown("---")
 st.markdown("""
