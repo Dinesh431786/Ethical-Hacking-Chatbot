@@ -4,5 +4,5 @@ google-generativeai
 yara-python
 requests
 scapy
-ftplib
+
 
