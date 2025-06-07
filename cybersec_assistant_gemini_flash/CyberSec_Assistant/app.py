@@ -65,16 +65,6 @@ def render_port_tags(port_table):
             unsafe_allow_html=True
         )
 
-def vuln_links(port_table):
-    for port, state, service, _ in port_table:
-        if state == "open":
-            portnum = port.split('/')[0]
-            cve_url = f"https://www.exploit-db.com/portsearch?port={portnum}"
-            st.markdown(
-                f"<a href='{cve_url}' target='_blank' style='text-decoration:none;'>🔗 <b>Check exploits for port {portnum}</b></a>",
-                unsafe_allow_html=True
-            )
-
 # --- Gemini & YARA Core Class ---
 
 class EthicalHackingBot:
@@ -223,7 +213,7 @@ def main():
                         render_port_tags(port_table)
                         st.markdown("#### Port Table")
                         st.markdown(render_port_table(port_table), unsafe_allow_html=True)
-                        vuln_links(port_table)
+                        # vuln_links(port_table)  # <- REMOVED AS REQUESTED
                         # Expandable details
                         for port, state, service, info in port_table:
                             if details.get(port):
