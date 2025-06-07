@@ -10,7 +10,7 @@ import yara
 
 st.set_page_config(page_title="CyberSec Assistant", page_icon="🛡️", layout="wide")
 
-# --- Core Functions ---
+# --- Core Functions (as before, unchanged) ---
 
 def parse_ports(output):
     port_table, details = [], {}
@@ -158,11 +158,11 @@ def main():
                 result = st.session_state.bot.run_nmap_scan(target, scan_type)
                 st.session_state.last_scan = result
 
-    # --- Dashboard Style Main Section ---
+    # ---- Only call tabs once! ----
+    tabs = st.tabs(["📊 Scan Dashboard", "📝 YARA & File Analysis", "💬 AI Security Chat"])
 
-    tab = st.tabs(["📊 Scan Dashboard", "📝 YARA & File Analysis", "💬 AI Security Chat"])[0]
-
-    with tab:
+    # --- Dashboard Tab ---
+    with tabs[0]:
         st.subheader("Nmap Results & AI Analytics")
         result = st.session_state.get("last_scan")
         if not result:
@@ -192,7 +192,6 @@ def main():
                             if details.get(port):
                                 with st.expander(f"📝 {port} ({service})", expanded=service in ("ssh", "http", "https")):
                                     st.code("\n".join(details[port]), language="text")
-                        # Export
                         export_report(output, f"{scan_type}_nmap_report.txt")
                     else:
                         st.warning("No open ports detected.")
@@ -208,7 +207,7 @@ def main():
                     st.code(output, language="text")
 
     # --- YARA Tab ---
-    with st.tabs(["📊 Scan Dashboard", "📝 YARA & File Analysis", "💬 AI Security Chat"])[1]:
+    with tabs[1]:
         st.subheader("YARA Rule Builder & File Scanner")
         yara_templates = {
             "Suspicious String": f'''rule suspicious_string_rule
@@ -296,7 +295,7 @@ def main():
                         st.warning("No matches found in any files.")
 
     # --- Chat Tab ---
-    with st.tabs(["📊 Scan Dashboard", "📝 YARA & File Analysis", "💬 AI Security Chat"])[2]:
+    with tabs[2]:
         st.subheader("AI Security Chat (Gemini)")
         if 'messages' not in st.session_state:
             st.session_state.messages = []
