@@ -79,15 +79,15 @@ class EthicalHackingBot:
         except Exception as e:
             st.error(f"Failed to initialize Gemini API: {str(e)}")
             return False
+
+    # >>>>>>>>>>> FIXED SIGNATURE BELOW <<<<<<<<<<
     def run_nmap_scan(self, target, scan_type, timing="T4", evasion=False):
         try:
             if not self.is_valid_target(target):
                 return {"error": "Invalid target. Please provide a valid IP or domain."}
             if not timing or not isinstance(timing, str) or not timing.startswith("T"):
                 timing = "T4"
-            if evasion not in [True, False]:
-                evasion = False
-            scan_commands = {
+            scan_commands_base = {
                 "basic": [
                     "nmap", "-sn", "-PE", "-PS80,443,21,22", "-PA3389,8080", target
                 ],
@@ -99,16 +99,15 @@ class EthicalHackingBot:
                     "--script=default,banner,http-headers,http-server-header,ssl-enum-ciphers,smb-os-discovery,smb-enum-sessions,ftp-anon", target
                 ],
             }
-            if scan_type not in scan_commands:
+            if scan_type not in scan_commands_base:
                 return {"error": "Invalid scan type"}
-
-            # Always use a fresh command list
-            cmd = list(scan_commands[scan_type])
+            # Always make a fresh copy
+            cmd = list(scan_commands_base[scan_type])
             if evasion and scan_type in ["port_scan", "service_scan"]:
                 cmd[1:1] = ["-f", "--data-length", "50", "--source-port", "53", "--badsum"]
-
-            st.write("DEBUG Nmap Command:", cmd)  # REMOVE or comment out after debugging
-
+            # Defensive: convert all to str
+            cmd = [str(x) for x in cmd if x is not None]
+            # st.write("DEBUG Nmap Command:", cmd)  # Uncomment for debug
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
             return {
                 "command": " ".join(cmd),
@@ -121,6 +120,7 @@ class EthicalHackingBot:
             return {"error": "Scan timed out after 3 minutes"}
         except Exception as e:
             return {"error": f"Scan failed: {str(e)}"}
+
     def create_yara_rule(self, rule_content):
         try:
             yara.compile(source=rule_content)
@@ -129,6 +129,7 @@ class EthicalHackingBot:
             return {"status": "error", "message": f"YARA syntax error: {str(e)}"}
         except Exception as e:
             return {"status": "error", "message": f"Error: {str(e)}"}
+
     def scan_with_yara(self, file_path, rule_content):
         try:
             rules = yara.compile(source=rule_content)
@@ -147,10 +148,12 @@ class EthicalHackingBot:
             }
         except Exception as e:
             return {"status": "error", "message": f"Scan failed: {str(e)}"}
+
     def is_valid_target(self, target):
         ip_pattern = r'^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$'
         domain_pattern = r'^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$'
         return bool(re.match(ip_pattern, target) or re.match(domain_pattern, target))
+
     def get_ai_response(self, user_input, context=""):
         if not self.genai_client:
             return "Please configure your Gemini API key first."
