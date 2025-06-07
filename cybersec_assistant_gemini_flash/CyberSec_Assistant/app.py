@@ -80,7 +80,6 @@ class EthicalHackingBot:
             st.error(f"Failed to initialize Gemini API: {str(e)}")
             return False
 
-    # >>>>>>>>>>> FIXED SIGNATURE BELOW <<<<<<<<<<
     def run_nmap_scan(self, target, scan_type, timing="T4", evasion=False):
         try:
             if not self.is_valid_target(target):
@@ -101,13 +100,10 @@ class EthicalHackingBot:
             }
             if scan_type not in scan_commands_base:
                 return {"error": "Invalid scan type"}
-            # Always make a fresh copy
             cmd = list(scan_commands_base[scan_type])
             if evasion and scan_type in ["port_scan", "service_scan"]:
                 cmd[1:1] = ["-f", "--data-length", "50", "--source-port", "53", "--badsum"]
-            # Defensive: convert all to str
             cmd = [str(x) for x in cmd if x is not None]
-            # st.write("DEBUG Nmap Command:", cmd)  # Uncomment for debug
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
             return {
                 "command": " ".join(cmd),
@@ -173,83 +169,10 @@ Provide detailed, technical responses with practical examples when appropriate."
         except Exception as e:
             return f"Error getting AI response: {str(e)}"
 
-def packet_sniffer(interface="eth0", count=100, timeout=15):
-    if not scapy_installed:
-        return {"error": "Scapy is not installed. Run `pip install scapy`."}
-    try:
-        packets = sniff(iface=interface, count=count, timeout=timeout)
-        result = []
-        for pkt in packets:
-            if IP in pkt:
-                summary = {
-                    "src": pkt[IP].src,
-                    "dst": pkt[IP].dst,
-                    "proto": pkt[IP].proto,
-                }
-                if TCP in pkt:
-                    summary["sport"] = pkt[TCP].sport
-                    summary["dport"] = pkt[TCP].dport
-                result.append(summary)
-        return result
-    except Exception as e:
-        return {"error": str(e)}
-
-def ftp_bruteforce(host, user_list, pass_list, timeout=3, rate_limit=0.2):
-    results = []
-    for username in user_list:
-        for password in pass_list:
-            try:
-                ftp = FTP(host, timeout=timeout)
-                ftp.login(user=username, passwd=password)
-                results.append({"username": username, "password": password, "status": "Success"})
-                ftp.quit()
-            except error_perm:
-                results.append({"username": username, "password": password, "status": "Fail"})
-            except Exception as ex:
-                results.append({"username": username, "password": password, "status": f"Error: {ex}"})
-            time.sleep(rate_limit)
-    return results
-
-def http_header_check(url):
-    try:
-        if not url.startswith("http"):
-            url = "http://" + url
-        r = requests.get(url, timeout=5)
-        info = {
-            "Status": r.status_code,
-            "Server": r.headers.get("Server"),
-            "X-Powered-By": r.headers.get("X-Powered-By"),
-            "Missing-Security-Headers": []
-        }
-        sec_headers = [
-            "X-Frame-Options", "Strict-Transport-Security", 
-            "Content-Security-Policy", "X-XSS-Protection"
-        ]
-        for h in sec_headers:
-            if h not in r.headers:
-                info["Missing-Security-Headers"].append(h)
-        return info
-    except Exception as e:
-        return {"error": str(e)}
-
-def ftp_anon_check(host):
-    try:
-        ftp = FTP(host, timeout=5)
-        ftp.login()
-        ftp.quit()
-        return {"anonymous_login": True}
-    except Exception as e:
-        return {"anonymous_login": False, "error": str(e)}
-
-def ssl_cipher_check(host, port=443):
-    try:
-        cmd = ["nmap", "--script=ssl-enum-ciphers", "-p", str(port), host]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-        return {"nmap_ssl_enum_ciphers": result.stdout}
-    except Exception as e:
-        return {"error": str(e)}
-
 def main():
+    if 'bot' not in st.session_state:
+        st.session_state.bot = EthicalHackingBot()
+
     st.markdown("""
     <div class="main-header">
         <h1 style="color: white; margin: 0;">🛡️ CyberSec Assistant</h1>
@@ -265,9 +188,6 @@ def main():
         access to computer systems is illegal.</p>
     </div>
     """, unsafe_allow_html=True)
-
-    if 'bot' not in st.session_state:
-        st.session_state.bot = EthicalHackingBot()
 
     with st.sidebar:
         st.header("Configuration")
@@ -287,12 +207,9 @@ def main():
                 )
                 st.session_state.last_scan = result
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-        "💬 Chat Assistant", "🔍 Scan Results", "📶 Packet Sniffer",
-        "🛡️ Vuln Checks", "🔑 Brute-Force", "📝 YARA Rules"
-    ])
+    tab1, tab2 = st.tabs(["Scan Results", "AI Assistant"])
 
-    with tab2:
+    with tab1:
         st.header("Scan Results")
         if 'last_scan' in st.session_state:
             result = st.session_state.last_scan
@@ -335,7 +252,7 @@ def main():
         else:
             st.info("No scan results yet. Run a scan from the sidebar.")
 
-    with tab1:
+    with tab2:
         st.header("AI Security Assistant")
         if 'messages' not in st.session_state:
             st.session_state.messages = []
@@ -354,158 +271,6 @@ def main():
                     response = st.session_state.bot.get_ai_response(prompt, context)
                     st.markdown(response)
                     st.session_state.messages.append({"role": "assistant", "content": response})
-
-    with tab3:
-        st.header("Passive Packet Monitor")
-        if not scapy_installed:
-            st.error("Scapy is not installed. Run `pip install scapy`.")
-        else:
-            iface = st.text_input("Network Interface", value="eth0")
-            count = st.number_input("Packet Count", value=50, min_value=1, max_value=10000)
-            timeout_val = st.number_input("Timeout (seconds)", value=15, min_value=1, max_value=600)
-            if st.button("Start Sniffing"):
-                with st.spinner("Sniffing packets..."):
-                    sniffed = packet_sniffer(interface=iface, count=int(count), timeout=int(timeout_val))
-                if isinstance(sniffed, dict) and "error" in sniffed:
-                    st.error(sniffed["error"])
-                else:
-                    st.success(f"Captured {len(sniffed)} packets.")
-                    st.dataframe(sniffed)
-
-    with tab4:
-        st.header("Vulnerability & Misconfiguration Checks")
-        protocol = st.selectbox("Protocol", ["HTTP", "SSL/TLS", "FTP"])
-        target_url = st.text_input("Target (IP/Domain or URL)")
-        if st.button("Run Check"):
-            if protocol == "HTTP":
-                results = http_header_check(target_url)
-                st.json(results)
-            elif protocol == "SSL/TLS":
-                results = ssl_cipher_check(target_url)
-                if "nmap_ssl_enum_ciphers" in results:
-                    st.code(results["nmap_ssl_enum_ciphers"])
-                else:
-                    st.json(results)
-            elif protocol == "FTP":
-                results = ftp_anon_check(target_url)
-                st.json(results)
-
-    with tab5:
-        st.header("Brute-Force Authentication Testing")
-        st.info("Currently supports FTP; more protocols can be added.")
-        host = st.text_input("FTP Host/IP")
-        usernames = st.text_area("Usernames (one per line)", value="anonymous\nftp\nadmin")
-        passwords = st.text_area("Passwords (one per line)", value="anonymous\npassword\n123456\nadmin")
-        rate = st.slider("Rate Limit (seconds between attempts)", min_value=0.0, max_value=5.0, value=0.2, step=0.1)
-        if st.button("Start FTP Brute-Force") and host:
-            user_list = [u.strip() for u in usernames.splitlines() if u.strip()]
-            pass_list = [p.strip() for p in passwords.splitlines() if p.strip()]
-            with st.spinner("Testing credentials..."):
-                results = ftp_bruteforce(host, user_list, pass_list, rate_limit=rate)
-            st.write("Results:")
-            st.dataframe(results)
-            hits = [r for r in results if r['status'] == "Success"]
-            if hits:
-                st.success(f"Valid credentials found: {hits}")
-            else:
-                st.warning("No valid credentials found.")
-
-    with tab6:
-        st.header("YARA Rule Builder & File Scanner")
-        yara_templates = {
-            "Suspicious String": '''rule suspicious_string_rule
-{
-    meta:
-        description = "Detects suspicious string in files"
-        author = "CyberSec Assistant"
-        date = "%s"
-    strings:
-        $string1 = "malware"
-    condition:
-        $string1
-}''' % datetime.now().strftime('%Y-%m-%d'),
-            "PE File (Windows EXE)": '''rule pe_file_rule
-{
-    meta:
-        description = "Detects PE executable files"
-        author = "CyberSec Assistant"
-        date = "%s"
-    strings:
-        $mz = { 4D 5A }
-    condition:
-        $mz at 0
-}''' % datetime.now().strftime('%Y-%m-%d'),
-            "Custom (edit below)": ""
-        }
-        selected_template = st.selectbox("YARA Rule Template", list(yara_templates.keys()))
-        rule_content = st.text_area(
-            "YARA Rule",
-            yara_templates[selected_template] if selected_template != "Custom (edit below)" else "",
-            height=300,
-            key="rule_editor"
-        )
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("Validate Rule"):
-                result = st.session_state.bot.create_yara_rule(rule_content)
-                if result['status'] == 'success':
-                    st.success(result['message'])
-                else:
-                    st.error(result['message'])
-            if st.button("Explain Rule with Gemini AI"):
-                if st.session_state.bot.genai_client:
-                    ai_response = st.session_state.bot.get_ai_response(
-                        "Explain this YARA rule and what it is designed to detect:",
-                        rule_content
-                    )
-                    st.markdown(ai_response)
-                else:
-                    st.warning("Configure Gemini API first.")
-        with col2:
-            uploaded_files = st.file_uploader(
-                "Upload files to scan", type=['exe', 'dll', 'pdf', 'doc', 'txt'],
-                accept_multiple_files=True
-            )
-            if uploaded_files and rule_content:
-                if st.button("Scan Files"):
-                    matches_found = False
-                    for uploaded_file in uploaded_files:
-                        with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
-                            tmp_file.write(uploaded_file.read())
-                            tmp_path = tmp_file.name
-                        try:
-                            result = st.session_state.bot.scan_with_yara(tmp_path, rule_content)
-                            if result['status'] == 'success':
-                                if result['matches']:
-                                    matches_found = True
-                                    st.success(f"Matches in `{uploaded_file.name}`:")
-                                    for match in result['matches']:
-                                        st.write(f"**Rule:** `{match['rule']}`")
-                                        if match['tags']:
-                                            st.write(f"**Tags:** {match['tags']}")
-                                        if match['meta']:
-                                            st.write(f"**Meta:** {match['meta']}")
-                                        if match['strings']:
-                                            for (offset, identifier, data) in match['strings']:
-                                                st.write(
-                                                    f"String `{identifier}` matched at offset `{offset}`: `{str(data)[:30]}...`"
-                                                )
-                                else:
-                                    st.info(f"No matches found in `{uploaded_file.name}`.")
-                            else:
-                                st.error(f"Scan failed for `{uploaded_file.name}`: {result['message']}")
-                        finally:
-                            os.unlink(tmp_path)
-                    if not matches_found:
-                        st.warning("No matches found in any files.")
-
-    st.markdown("---")
-    st.markdown("""
-    <div style="text-align: center; color: #666;">
-        <p>🛡️ CyberSec Assistant - For Ethical Security Research Only</p>
-        <p>Always ensure proper authorization before testing systems</p>
-    </div>
-    """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
