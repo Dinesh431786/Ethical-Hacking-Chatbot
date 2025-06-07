@@ -7,7 +7,6 @@ import os
 import tempfile
 from datetime import datetime
 import yara
-import pyperclip
 
 st.set_page_config(page_title="CyberSec Assistant", page_icon="🛡️", layout="wide")
 
@@ -65,13 +64,117 @@ def export_report(text, filename):
     with open(tmp_path, "w", encoding="utf-8") as f: f.write(text)
     with open(tmp_path, "rb") as f: st.download_button(f"⬇️ Download {filename}", f, file_name=filename, mime="text/plain")
 
-def rate_risk(port_table):
-    critical = {"22/": "SSH", "3389/": "RDP", "3306/": "MySQL", "5432/": "PostgreSQL", "445/": "SMB"}
-    found = [p for p in port_table if any(p[0].startswith(x) for x in critical.keys())]
-    if found: return ("High", "🔴", "Critical management or DB ports open: " + ", ".join(f"{p[0]} {p[2]}" for p in found))
-    elif len([p for p in port_table if p[1] == "open"]) > 3: return ("Medium", "🟠", "Multiple ports/services are open")
-    elif port_table: return ("Low", "🟢", "Minimal risk. Only common ports open")
-    else: return ("None", "🟢", "No open ports detected")
+def port_risk_info(port, service):
+    common_ports = {
+        "22": ("SSH", "High", "🔴", [
+            "SSH is a frequent target for brute-force and credential attacks.",
+            "If possible, restrict access by IP, disable password login, use keys, run on non-standard port, enable 2FA."
+        ]),
+        "3389": ("RDP", "Critical", "🛑", [
+            "RDP is a top target for ransomware and brute-force attacks.",
+            "Restrict to VPN, use NLA, monitor logs, never expose directly to the internet."
+        ]),
+        "23": ("Telnet", "Critical", "🛑", [
+            "Telnet is insecure (plaintext). Should never be open to the internet.",
+            "Replace with SSH or close. If legacy required, firewall restrict."
+        ]),
+        "445": ("SMB", "Critical", "🛑", [
+            "SMB (Windows file sharing) is a worm/ransomware entry point.",
+            "Block from internet, patch regularly, restrict to internal use only."
+        ]),
+        "80": ("HTTP", "Medium", "🟡", [
+            "HTTP is unencrypted web. Test for web vulnerabilities (XSS, SQLi, etc).",
+            "Redirect to HTTPS, use WAF, keep server/software patched."
+        ]),
+        "443": ("HTTPS", "Low", "🟢", [
+            "HTTPS is encrypted, but web app vulns still apply.",
+            "Check SSL config, scan for web app vulns, keep software up to date."
+        ]),
+        "3306": ("MySQL", "Critical", "🛑", [
+            "Exposed databases are a top breach vector.",
+            "Never expose MySQL to the internet; bind to localhost or firewall restrict."
+        ]),
+        "5432": ("PostgreSQL", "Critical", "🛑", [
+            "Exposed databases are a top breach vector.",
+            "Never expose PostgreSQL to the internet; bind to localhost or firewall restrict."
+        ]),
+        "21": ("FTP", "High", "🔴", [
+            "FTP is unencrypted and can leak sensitive data.",
+            "Use SFTP/FTPS, restrict access, avoid for sensitive info."
+        ]),
+        "25": ("SMTP", "Medium", "🟠", [
+            "Mail servers are often abused for spam or relay.",
+            "Restrict relay, use strong authentication, monitor for abuse."
+        ])
+    }
+    portnum = port.split("/")[0]
+    if portnum in common_ports:
+        name, risk, color, advice = common_ports[portnum]
+        return risk, color, advice
+    else:
+        return "Unknown", "⚪", [
+            "Uncommon service. Research service and restrict if not needed.",
+            "Monitor for unusual traffic or abuse."
+        ]
+
+def get_dashboard_summary(port_table):
+    counts = {"Critical":0, "High":0, "Medium":0, "Low":0, "Unknown":0}
+    port_advices = []
+    for port, state, service, info in port_table:
+        if state != "open":
+            continue
+        risk, color, advice = port_risk_info(port, service)
+        counts[risk] = counts.get(risk, 0) + 1
+        port_advices.append((port, service, risk, color, advice))
+    return counts, port_advices
+
+def highlight_vulns(port_details):
+    vulns = []
+    for line in port_details:
+        if "VULNERABLE:" in line or "CVE-" in line:
+            # Auto-link CVE IDs
+            line = re.sub(r'(CVE-\d{4}-\d+)', r'[\1](https://cvedetails.com/cve/\1/)', line)
+            vulns.append(line)
+    return vulns
+
+def dashboard_panel(port_advices, details):
+    # "Fix first" box for critical/high
+    criticals = [p for p in port_advices if p[2] in ("Critical", "High")]
+    if criticals:
+        st.markdown("## 🛑 Fix These First")
+        for port, service, risk, color, advice in criticals:
+            st.error(f"{color} **{port} ({service})** – {risk} risk")
+            for line in advice:
+                st.write(f"- {line}")
+
+    st.markdown("## 🔍 Open Ports & Services Analysis")
+    for port, service, risk, color, advice in port_advices:
+        exp_title = f"{color} {port} ({service}) – {risk} risk"
+        with st.expander(exp_title, expanded=risk in ["Critical","High"]):
+            st.markdown("**Why is this risky?**")
+            st.write(advice[0])
+            st.markdown("**How to mitigate:**")
+            st.write(advice[1])
+            # Vuln highlight if available
+            port_detail = details.get(port)
+            if port_detail:
+                vulns = highlight_vulns(port_detail)
+                if vulns:
+                    st.markdown("**🔴 Vulnerabilities Detected:**")
+                    for v in vulns:
+                        st.error(v)
+                # Always show raw detail if present
+                st.markdown("**Raw Script Output:**")
+                st.code("\n".join(port_detail), language="text")
+
+def risk_overall(counts):
+    if counts["Critical"]: return "Critical", "🛑"
+    if counts["High"]: return "High", "🔴"
+    if counts["Medium"]: return "Medium", "🟠"
+    if counts["Low"]: return "Low", "🟢"
+    return "Unknown", "⚪"
+
+# --- Gemini & YARA Core Class ---
 
 class EthicalHackingBot:
     def __init__(self): self.genai_client = None
@@ -86,10 +189,11 @@ class EthicalHackingBot:
             "basic": ["nmap", "-sn", target],
             "port_scan": ["nmap", "-sT", target],
             "service_scan": ["nmap", "-sV", "-sC", target],
+            "vuln_scan": ["nmap", "--script", "vuln", target],
         }
         try:
             cmd = scan_commands[scan_type]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
             return {
                 "command": " ".join(cmd),
                 "stdout": result.stdout,
@@ -140,7 +244,48 @@ NEVER assist with illegal use. Use technical terms and always give real actionab
         except Exception as e:
             return f"Gemini error: {str(e)}"
 
-# --- UI ---
+# --- Dashboard Tab ---
+
+def show_dashboard(result):
+    st.subheader("Scan Results & Security Dashboard")
+    if 'error' in result:
+        st.error(f"Scan Error: {result['error']}")
+        return
+    output = result.get("stdout", "")
+    scan_type = result.get("scan_type", "")
+    st.write(f"**Scan Command:** `{result.get('command','N/A')}`")
+    st.write(f"⏰ <b>Scan finished at:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", unsafe_allow_html=True)
+    if scan_type == "basic":
+        if "Host is up" in output:
+            st.success("🎯 Host is **up and reachable!**")
+        elif "Host seems down" in output:
+            st.error("❌ Host is **down or unreachable.**")
+        else:
+            st.info(output)
+    else:
+        port_table, details = parse_ports(output)
+        counts, port_advices = get_dashboard_summary(port_table)
+        risk, color = risk_overall(counts)
+        st.markdown(f"<div style='font-size:1.2rem;margin-bottom:7px'>Overall Security Risk: <b>{color} {risk}</b></div>", unsafe_allow_html=True)
+        advanced_port_tags(port_table)
+        dashboard_panel(port_advices, details)
+        st.markdown("---")
+        st.markdown("### Port/Service Table")
+        st.markdown(render_port_table(port_table), unsafe_allow_html=True)
+        export_report(output, f"{scan_type}_nmap_report.txt")
+        st.markdown("---")
+        if st.button("🔍 AI Security Analysis", key="ai_context"):
+            ai = st.session_state.bot.get_ai_response(
+                "Give an actionable security summary of these Nmap scan results. Focus on open ports, their risks, and suggested next actions. Explain in clear language for a technical team.",
+                output
+            )
+            with st.expander("Gemini AI Security Analysis", expanded=True):
+                st.markdown(ai)
+                export_report(ai, "gemini_ai_security_summary.txt")
+        with st.expander("Raw Nmap Output"):
+            st.code(output, language="text")
+
+# --- Main UI ---
 
 def main():
     st.markdown("<h1>🛡️ CyberSec Assistant</h1>", unsafe_allow_html=True)
@@ -161,9 +306,9 @@ def main():
             if st.session_state.bot.initialize_gemini(gemini_key):
                 st.success("Gemini API initialized!")
         st.divider()
-        target = st.text_input("Target (IP or Domain)", placeholder="192.168.1.1 / example.com", key="target")
+        target = st.text_input("Target (IP or Domain)", placeholder="example.com or 192.168.1.1 (no http/https)", key="target")
         scan_type = st.radio("Scan Type", [
-            "basic", "port_scan", "service_scan"
+            "basic", "port_scan", "service_scan", "vuln_scan"
         ], horizontal=True, key="scan_type")
         if st.button("Run Nmap Scan", key="run_nmap") and target:
             with st.spinner("Scanning..."):
@@ -172,60 +317,13 @@ def main():
 
     tabs = st.tabs(["📊 Scan Dashboard", "📝 YARA & File Analysis", "💬 AI Security Chat"])
 
-    # --- Dashboard Tab ---
     with tabs[0]:
-        st.subheader("Scan Results & Security Dashboard")
         result = st.session_state.get("last_scan")
         if not result:
             st.info("Run a scan to see results.")
         else:
-            if 'error' in result:
-                st.error(f"Scan Error: {result['error']}")
-            else:
-                output = result.get("stdout", "")
-                scan_type = result.get("scan_type", "")
-                st.write(f"**Scan Command:** `{result.get('command','N/A')}`")
-                st.write(f"⏰ <b>Scan finished at:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", unsafe_allow_html=True)
-                if scan_type == "basic":
-                    if "Host is up" in output:
-                        st.success("🎯 Host is **up and reachable!**")
-                    elif "Host seems down" in output:
-                        st.error("❌ Host is **down or unreachable.**")
-                    else:
-                        st.info(output)
-                else:
-                    port_table, details = parse_ports(output)
-                    risk, color, note = rate_risk(port_table)
-                    st.markdown(f"<div style='font-size:1.2rem;margin-bottom:7px'>Security Priority: <b>{color} {risk}</b></div>", unsafe_allow_html=True)
-                    st.info(note)
-                    advanced_port_tags(port_table)
-                    if port_table:
-                        st.markdown(render_port_table(port_table), unsafe_allow_html=True)
-                        st.write("🔬 Click for details on each port/service:")
-                        for port, state, service, info in port_table:
-                            if details.get(port):
-                                with st.expander(f"📝 {port} ({service})", expanded=service in ("ssh", "http", "https")):
-                                    st.code("\n".join(details[port]), language="text")
-                        export_report(output, f"{scan_type}_nmap_report.txt")
-                        portlist = ", ".join([f"{p[0]} ({p[2]})" for p in port_table if p[1] == "open"])
-                        if st.button("📋 Copy Open Ports/Services to Clipboard", key="copyports"):
-                            pyperclip.copy(portlist)
-                            st.toast("Port/service list copied!", icon="📋")
-                    else:
-                        st.warning("No open ports detected.")
-                    st.markdown("---")
-                    if st.button("🔍 AI Security Analysis", key="ai_context"):
-                        ai = st.session_state.bot.get_ai_response(
-                            "Give an actionable security summary of these Nmap scan results. Focus on open ports, their risks, and suggested next actions. Explain in clear language for a technical team.",
-                            output
-                        )
-                        with st.expander("Gemini AI Security Analysis", expanded=True):
-                            st.markdown(ai)
-                            export_report(ai, "gemini_ai_security_summary.txt")
-                with st.expander("Raw Nmap Output"):
-                    st.code(output, language="text")
+            show_dashboard(result)
 
-    # --- YARA Tab ---
     with tabs[1]:
         st.subheader("YARA Rule Builder & File Scanner")
         yara_templates = {
@@ -313,7 +411,6 @@ def main():
                     else:
                         st.warning("No matches found in any files.")
 
-    # --- Chat Tab ---
     with tabs[2]:
         st.subheader("AI Security Chat (Gemini)")
         if 'messages' not in st.session_state:
