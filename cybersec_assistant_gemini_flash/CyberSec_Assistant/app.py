@@ -7,6 +7,15 @@ import os
 import tempfile
 from datetime import datetime
 import yara
+import requests
+import time
+
+from ftplib import FTP, error_perm
+try:
+    from scapy.all import sniff, IP, TCP
+    scapy_installed = True
+except ImportError:
+    scapy_installed = False
 
 st.set_page_config(page_title="CyberSec Assistant", page_icon="🛡️", layout="wide")
 
@@ -78,7 +87,7 @@ class EthicalHackingBot:
         except Exception as e:
             st.error(f"Failed to initialize Gemini API: {str(e)}")
             return False
-    def run_nmap_scan(self, target, scan_type):
+    def run_nmap_scan(self, target, scan_type, timing="T4", evasion=False):
         try:
             if not self.is_valid_target(target):
                 return {"error": "Invalid target. Please provide a valid IP or domain."}
@@ -87,12 +96,17 @@ class EthicalHackingBot:
                     "nmap", "-sn", "-PE", "-PS80,443,21,22", "-PA3389,8080", target
                 ],
                 "port_scan": [
-                    "nmap", "-sS", "-T4", "-p-", "--min-rate", "500", target
+                    "nmap", "-sS", f"-{timing}", "--top-ports", "1000", "--reason", "--script=banner", target
                 ],
                 "service_scan": [
-                    "nmap", "-sS", "-T4", "-A", "-p-", "--version-intensity", "5", "--min-rate", "500", target
+                    "nmap", "-sS", f"-{timing}", "-sV", "--top-ports", "1000", "--reason",
+                    "--script=default,banner,http-headers,http-server-header,ssl-enum-ciphers,smb-os-discovery,smb-enum-sessions,ftp-anon", target
                 ],
             }
+            # Evasion options
+            if evasion and scan_type in ["port_scan", "service_scan"]:
+                # Add fragment, data length, source port, badsum for evasion
+                scan_commands[scan_type][1:1] = ["-f", "--data-length", "50", "--source-port", "53", "--badsum"]
             if scan_type not in scan_commands:
                 return {"error": "Invalid scan type"}
             result = subprocess.run(scan_commands[scan_type], capture_output=True, text=True, timeout=180)
@@ -156,6 +170,89 @@ Provide detailed, technical responses with practical examples when appropriate."
         except Exception as e:
             return f"Error getting AI response: {str(e)}"
 
+# --- Passive Packet Sniffer ---
+
+def packet_sniffer(interface="eth0", count=100, timeout=15):
+    if not scapy_installed:
+        return {"error": "Scapy is not installed. Run `pip install scapy`."}
+    try:
+        packets = sniff(iface=interface, count=count, timeout=timeout)
+        result = []
+        for pkt in packets:
+            if IP in pkt:
+                summary = {
+                    "src": pkt[IP].src,
+                    "dst": pkt[IP].dst,
+                    "proto": pkt[IP].proto,
+                }
+                if TCP in pkt:
+                    summary["sport"] = pkt[TCP].sport
+                    summary["dport"] = pkt[TCP].dport
+                result.append(summary)
+        return result
+    except Exception as e:
+        return {"error": str(e)}
+
+# --- Fast FTP Brute-Force (can expand to SSH/SMB/HTTP) ---
+
+def ftp_bruteforce(host, user_list, pass_list, timeout=3, rate_limit=0.2):
+    results = []
+    for username in user_list:
+        for password in pass_list:
+            try:
+                ftp = FTP(host, timeout=timeout)
+                ftp.login(user=username, passwd=password)
+                results.append({"username": username, "password": password, "status": "Success"})
+                ftp.quit()
+            except error_perm:
+                results.append({"username": username, "password": password, "status": "Fail"})
+            except Exception as ex:
+                results.append({"username": username, "password": password, "status": f"Error: {ex}"})
+            time.sleep(rate_limit)  # Rate limit
+    return results
+
+# --- Lightweight Vuln/Misconfig Checks ---
+
+def http_header_check(url):
+    try:
+        if not url.startswith("http"):
+            url = "http://" + url
+        r = requests.get(url, timeout=5)
+        info = {
+            "Status": r.status_code,
+            "Server": r.headers.get("Server"),
+            "X-Powered-By": r.headers.get("X-Powered-By"),
+            "Missing-Security-Headers": []
+        }
+        sec_headers = [
+            "X-Frame-Options", "Strict-Transport-Security", 
+            "Content-Security-Policy", "X-XSS-Protection"
+        ]
+        for h in sec_headers:
+            if h not in r.headers:
+                info["Missing-Security-Headers"].append(h)
+        return info
+    except Exception as e:
+        return {"error": str(e)}
+
+def ftp_anon_check(host):
+    try:
+        ftp = FTP(host, timeout=5)
+        ftp.login()
+        ftp.quit()
+        return {"anonymous_login": True}
+    except Exception as e:
+        return {"anonymous_login": False, "error": str(e)}
+
+def ssl_cipher_check(host, port=443):
+    try:
+        # Simple check via nmap's ssl-enum-ciphers
+        cmd = ["nmap", "--script=ssl-enum-ciphers", "-p", str(port), host]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        return {"nmap_ssl_enum_ciphers": result.stdout}
+    except Exception as e:
+        return {"error": str(e)}
+
 # --- Streamlit UI ---
 
 def main():
@@ -178,6 +275,7 @@ def main():
     if 'bot' not in st.session_state:
         st.session_state.bot = EthicalHackingBot()
 
+    # ---- Sidebar: Configuration ----
     with st.sidebar:
         st.header("Configuration")
         gemini_key = st.text_input("Gemini API Key", type="password")
@@ -187,12 +285,17 @@ def main():
         st.header("Nmap Quick Scan")
         target = st.text_input("Target (IP/Domain)", placeholder="192.168.1.1 or example.com")
         scan_type = st.selectbox("Nmap Scan Type", ["basic", "port_scan", "service_scan"])
+        timing = st.selectbox("Timing (T1–T5, higher=faster/less accurate)", ["T3", "T4", "T5"], index=1)
+        evasion = st.checkbox("Enable Firewall/IDS Evasion", value=False)
         if st.button("Run Nmap Scan") and target:
             with st.spinner("Running scan..."):
-                result = st.session_state.bot.run_nmap_scan(target, scan_type)
+                result = st.session_state.bot.run_nmap_scan(target, scan_type, timing, evasion)
                 st.session_state.last_scan = result
 
-    tab1, tab2, tab3 = st.tabs(["💬 Chat Assistant", "🔍 Scan Results", "📝 YARA Rules"])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        "💬 Chat Assistant", "🔍 Scan Results", "📶 Packet Sniffer", 
+        "🛡️ Vuln Checks", "🔑 Brute-Force", "📝 YARA Rules"
+    ])
 
     # --- Tab 2: Scan Results ---
     with tab2:
@@ -262,8 +365,66 @@ def main():
                     st.markdown(response)
                     st.session_state.messages.append({"role": "assistant", "content": response})
 
-    # --- Tab 3: YARA ---
+    # --- Tab 3: Passive Packet Sniffer ---
     with tab3:
+        st.header("Passive Packet Monitor")
+        if not scapy_installed:
+            st.error("Scapy is not installed. Run `pip install scapy`.")
+        else:
+            iface = st.text_input("Network Interface", value="eth0")
+            count = st.number_input("Packet Count", value=50, min_value=1, max_value=10000)
+            timeout_val = st.number_input("Timeout (seconds)", value=15, min_value=1, max_value=600)
+            if st.button("Start Sniffing"):
+                with st.spinner("Sniffing packets..."):
+                    sniffed = packet_sniffer(interface=iface, count=int(count), timeout=int(timeout_val))
+                if isinstance(sniffed, dict) and "error" in sniffed:
+                    st.error(sniffed["error"])
+                else:
+                    st.success(f"Captured {len(sniffed)} packets.")
+                    st.dataframe(sniffed)
+
+    # --- Tab 4: Vuln/Misconfig Checks ---
+    with tab4:
+        st.header("Vulnerability & Misconfiguration Checks")
+        protocol = st.selectbox("Protocol", ["HTTP", "SSL/TLS", "FTP"])
+        target_url = st.text_input("Target (IP/Domain or URL)")
+        if st.button("Run Check"):
+            if protocol == "HTTP":
+                results = http_header_check(target_url)
+                st.json(results)
+            elif protocol == "SSL/TLS":
+                results = ssl_cipher_check(target_url)
+                if "nmap_ssl_enum_ciphers" in results:
+                    st.code(results["nmap_ssl_enum_ciphers"])
+                else:
+                    st.json(results)
+            elif protocol == "FTP":
+                results = ftp_anon_check(target_url)
+                st.json(results)
+
+    # --- Tab 5: Brute-Force ---
+    with tab5:
+        st.header("Brute-Force Authentication Testing")
+        st.info("Currently supports FTP; more protocols can be added.")
+        host = st.text_input("FTP Host/IP")
+        usernames = st.text_area("Usernames (one per line)", value="anonymous\nftp\nadmin")
+        passwords = st.text_area("Passwords (one per line)", value="anonymous\npassword\n123456\nadmin")
+        rate = st.slider("Rate Limit (seconds between attempts)", min_value=0.0, max_value=5.0, value=0.2, step=0.1)
+        if st.button("Start FTP Brute-Force") and host:
+            user_list = [u.strip() for u in usernames.splitlines() if u.strip()]
+            pass_list = [p.strip() for p in passwords.splitlines() if p.strip()]
+            with st.spinner("Testing credentials..."):
+                results = ftp_bruteforce(host, user_list, pass_list, rate_limit=rate)
+            st.write("Results:")
+            st.dataframe(results)
+            hits = [r for r in results if r['status'] == "Success"]
+            if hits:
+                st.success(f"Valid credentials found: {hits}")
+            else:
+                st.warning("No valid credentials found.")
+
+    # --- Tab 6: YARA ---
+    with tab6:
         st.header("YARA Rule Builder & File Scanner")
         yara_templates = {
             "Suspicious String": '''rule suspicious_string_rule
