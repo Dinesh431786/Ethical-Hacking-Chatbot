@@ -128,15 +128,6 @@ def get_dashboard_summary(port_table):
         port_advices.append((port, service, risk, color, advice))
     return counts, port_advices
 
-def highlight_vulns(port_details):
-    vulns = []
-    for line in port_details:
-        if "VULNERABLE:" in line or "CVE-" in line:
-            # Auto-link CVE IDs
-            line = re.sub(r'(CVE-\d{4}-\d+)', r'[\1](https://cvedetails.com/cve/\1/)', line)
-            vulns.append(line)
-    return vulns
-
 def dashboard_panel(port_advices, details):
     # "Fix first" box for critical/high
     criticals = [p for p in port_advices if p[2] in ("Critical", "High")]
@@ -155,15 +146,9 @@ def dashboard_panel(port_advices, details):
             st.write(advice[0])
             st.markdown("**How to mitigate:**")
             st.write(advice[1])
-            # Vuln highlight if available
+            # Always show raw detail if present
             port_detail = details.get(port)
             if port_detail:
-                vulns = highlight_vulns(port_detail)
-                if vulns:
-                    st.markdown("**🔴 Vulnerabilities Detected:**")
-                    for v in vulns:
-                        st.error(v)
-                # Always show raw detail if present
                 st.markdown("**Raw Script Output:**")
                 st.code("\n".join(port_detail), language="text")
 
@@ -187,7 +172,6 @@ class EthicalHackingBot:
             "basic": ["nmap", "-sn", target],
             "port_scan": ["nmap", "-sT", target],
             "service_scan": ["nmap", "-sV", "-sC", target],
-            "vuln_scan": ["nmap", "--script", "vuln", target],
         }
         if scan_type not in scan_commands:
             return {"error": f"Scan failed: '{scan_type}'"}
@@ -313,7 +297,7 @@ def main():
         st.divider()
         target = st.text_input("Target (IP or Domain)", placeholder="example.com or 192.168.1.1 (no http/https)", key="target")
         scan_type = st.radio("Scan Type", [
-            "basic", "port_scan", "service_scan", "vuln_scan"
+            "basic", "port_scan", "service_scan"
         ], horizontal=True, key="scan_type")
         if st.button("Run Nmap Scan", key="run_nmap") and target:
             with st.spinner("Scanning..."):
