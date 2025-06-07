@@ -20,12 +20,10 @@ def parse_ports(output):
     current_port = None
 
     for line in lines:
-        # Table header (start)
         if line.strip().startswith("PORT "):
             in_table = True
             continue
         if in_table:
-            # End table if not a port line
             if not line.strip() or not re.match(r"^\d+/", line):
                 in_table = False
                 continue
@@ -35,7 +33,6 @@ def parse_ports(output):
                 info = parts[3] if len(parts) > 3 else ""
                 port_table.append([port, state, service, info])
                 details[port] = []
-        # Add details (script output, banners) under ports
         port_match = re.match(r"^(\d+/[a-z]+)", line)
         if port_match:
             current_port = port_match.group(1)
@@ -83,9 +80,9 @@ class EthicalHackingBot:
             if not self.is_valid_target(target):
                 return {"error": "Invalid target. Please provide a valid IP or domain."}
             scan_commands = {
-                "basic": ["nmap", "-sn", target],                        # ping scan
-                "port_scan": ["nmap", "-sT", target],                    # TCP connect scan (no root needed)
-                "service_scan": ["nmap", "-sV", "-sC", target],          # version/service detection + default scripts
+                "basic": ["nmap", "-sn", target],
+                "port_scan": ["nmap", "-sT", target],
+                "service_scan": ["nmap", "-sV", "-sC", target],
             }
             if scan_type not in scan_commands:
                 return {"error": "Invalid scan type"}
@@ -154,18 +151,14 @@ Provide detailed, technical responses with practical examples when appropriate."
 
 def main():
     st.markdown("""
-    <div class="main-header">
-        <h1 style="color: white; margin: 0;">🛡️ CyberSec Assistant</h1>
-        <p style="color: #e0e0e0; margin: 0;">Ethical Hacking & Security Research Tool</p>
-    </div>
+    <h1 style="color: white; margin: 0;">🛡️ CyberSec Assistant</h1>
+    <p style="color: #e0e0e0; margin: 0;">Ethical Hacking & Security Research Tool</p>
     """, unsafe_allow_html=True)
-
     st.markdown("""
-    <div class="warning-box">
-        <h4>⚠️ Ethical Use Only</h4>
-        <p>This tool is designed for authorized security testing and research only.
-        Ensure you have proper permission before scanning any systems. Unauthorized
-        access to computer systems is illegal.</p>
+    <div style="background: #222; padding: 10px 18px; border-radius: 12px; margin-bottom: 14px;">
+        <b>⚠️ Ethical Use Only:</b>
+        This tool is designed for authorized security testing and research only.
+        Ensure you have proper permission before scanning any systems. Unauthorized access to computer systems is illegal.
     </div>
     """, unsafe_allow_html=True)
 
@@ -174,14 +167,14 @@ def main():
 
     with st.sidebar:
         st.header("Configuration")
-        gemini_key = st.text_input("Gemini API Key", type="password")
+        gemini_key = st.text_input("Gemini API Key", type="password", key="gemini_api")
         if gemini_key and not st.session_state.bot.genai_client:
             if st.session_state.bot.initialize_gemini(gemini_key):
                 st.success("Gemini API initialized!")
         st.header("Nmap Quick Scan")
-        target = st.text_input("Target (IP/Domain)", placeholder="192.168.1.1 or example.com")
-        scan_type = st.selectbox("Nmap Scan Type", ["basic", "port_scan", "service_scan"])
-        if st.button("Run Nmap Scan") and target:
+        target = st.text_input("Target (IP/Domain)", placeholder="192.168.1.1 or example.com", key="nmap_target")
+        scan_type = st.selectbox("Nmap Scan Type", ["basic", "port_scan", "service_scan"], key="scan_type")
+        if st.button("Run Nmap Scan", key="run_nmap") and target:
             with st.spinner("Running scan..."):
                 result = st.session_state.bot.run_nmap_scan(target, scan_type)
                 st.session_state.last_scan = result
@@ -213,23 +206,19 @@ def main():
                         render_port_tags(port_table)
                         st.markdown("#### Port Table")
                         st.markdown(render_port_table(port_table), unsafe_allow_html=True)
-                        # vuln_links(port_table)  # <- REMOVED AS REQUESTED
-                        # Expandable details
                         for port, state, service, info in port_table:
                             if details.get(port):
                                 with st.expander(f"📝 Details for {port} ({service})", expanded=False):
                                     st.code("\n".join(details[port]), language="text")
                     else:
                         st.warning("No open ports detected.")
-                    # Gemini AI summary
-                    if st.button("AI Insight (Pro)"):
+                    if st.button("AI Insight (Pro)", key="ai_insight"):
                         st.markdown("⌛ Gemini analyzing results...")
                         ai = st.session_state.bot.get_ai_response(
                             "Explain these nmap scan results in plain English for a non-technical user. Which ports are most interesting and why?",
                             output
                         )
                         st.markdown(ai)
-                # Raw output expander
                 st.markdown("---")
                 with st.expander("Raw Nmap Output"):
                     st.code(output, language="text")
@@ -241,6 +230,9 @@ def main():
         st.header("AI Security Assistant")
         if 'messages' not in st.session_state:
             st.session_state.messages = []
+        if st.button("Clear Chat", key="clear_chat"):
+            st.session_state.messages = []
+            st.experimental_rerun()
         for message in st.session_state.messages:
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
@@ -261,46 +253,42 @@ def main():
     with tab3:
         st.header("YARA Rule Builder & File Scanner")
         yara_templates = {
-            "Suspicious String": '''rule suspicious_string_rule
-{
+            "Suspicious String": f'''rule suspicious_string_rule
+{{
     meta:
         description = "Detects suspicious string in files"
         author = "CyberSec Assistant"
-        date = "%s"
+        date = "{datetime.now().strftime('%Y-%m-%d')}"
     strings:
         $string1 = "malware"
     condition:
         $string1
-}''' % datetime.now().strftime('%Y-%m-%d'),
-            "PE File (Windows EXE)": '''rule pe_file_rule
-{
+}}''',
+            "PE File (Windows EXE)": f'''rule pe_file_rule
+{{
     meta:
         description = "Detects PE executable files"
         author = "CyberSec Assistant"
-        date = "%s"
+        date = "{datetime.now().strftime('%Y-%m-%d')}"
     strings:
-        $mz = { 4D 5A }
+        $mz = {{ 4D 5A }}
     condition:
         $mz at 0
-}''' % datetime.now().strftime('%Y-%m-%d'),
+}}''',
             "Custom (edit below)": ""
         }
-        selected_template = st.selectbox("YARA Rule Template", list(yara_templates.keys()))
-        rule_content = st.text_area(
-            "YARA Rule",
-            yara_templates[selected_template] if selected_template != "Custom (edit below)" else "",
-            height=300,
-            key="rule_editor"
-        )
+        selected_template = st.selectbox("YARA Rule Template", list(yara_templates.keys()), key="yara_template")
+        default_rule = yara_templates[selected_template] if selected_template != "Custom (edit below)" else ""
+        rule_content = st.text_area("YARA Rule", value=default_rule, height=250, key="rule_editor")
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("Validate Rule"):
+            if st.button("Validate Rule", key="validate_yara"):
                 result = st.session_state.bot.create_yara_rule(rule_content)
                 if result['status'] == 'success':
                     st.success(result['message'])
                 else:
                     st.error(result['message'])
-            if st.button("Explain Rule with Gemini AI"):
+            if st.button("Explain Rule with Gemini AI", key="explain_yara"):
                 if st.session_state.bot.genai_client:
                     ai_response = st.session_state.bot.get_ai_response(
                         "Explain this YARA rule and what it is designed to detect:",
@@ -312,10 +300,10 @@ def main():
         with col2:
             uploaded_files = st.file_uploader(
                 "Upload files to scan", type=['exe', 'dll', 'pdf', 'doc', 'txt'],
-                accept_multiple_files=True
+                accept_multiple_files=True, key="yara_upload"
             )
             if uploaded_files and rule_content:
-                if st.button("Scan Files"):
+                if st.button("Scan Files", key="scan_files"):
                     matches_found = False
                     for uploaded_file in uploaded_files:
                         with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
