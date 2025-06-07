@@ -183,14 +183,16 @@ class EthicalHackingBot:
         except Exception as e: st.error(f"Gemini API error: {str(e)}"); return False
         self.genai_client = genai.GenerativeModel('gemini-1.5-flash'); return True
     def run_nmap_scan(self, target, scan_type):
-        if not self.is_valid_target(target):
-            return {"error": "Invalid target. Please provide a valid IP or domain."}
         scan_commands = {
             "basic": ["nmap", "-sn", target],
             "port_scan": ["nmap", "-sT", target],
             "service_scan": ["nmap", "-sV", "-sC", target],
             "vuln_scan": ["nmap", "--script", "vuln", target],
         }
+        if scan_type not in scan_commands:
+            return {"error": f"Scan failed: '{scan_type}'"}
+        if not self.is_valid_target(target):
+            return {"error": "Invalid target. Please provide a valid IP or domain."}
         try:
             cmd = scan_commands[scan_type]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
@@ -248,7 +250,10 @@ NEVER assist with illegal use. Use technical terms and always give real actionab
 
 def show_dashboard(result):
     st.subheader("Scan Results & Security Dashboard")
-    if 'error' in result:
+    if not result:
+        st.info("Run a scan to see results.")
+        return
+    if "error" in result:
         st.error(f"Scan Error: {result['error']}")
         return
     output = result.get("stdout", "")
@@ -319,10 +324,7 @@ def main():
 
     with tabs[0]:
         result = st.session_state.get("last_scan")
-        if not result:
-            st.info("Run a scan to see results.")
-        else:
-            show_dashboard(result)
+        show_dashboard(result)
 
     with tabs[1]:
         st.subheader("YARA Rule Builder & File Scanner")
