@@ -83,9 +83,15 @@ class EthicalHackingBot:
             if not self.is_valid_target(target):
                 return {"error": "Invalid target. Please provide a valid IP or domain."}
             scan_commands = {
-                "basic": ["nmap", "-sn", target],                        # ping scan
-                "port_scan": ["nmap", "-sT", target],                    # TCP connect scan (no root needed)
-                "service_scan": ["nmap", "-sV", "-sC", target],          # version/service detection + default scripts
+                "basic": [
+                    "nmap", "-sn", "-PE", "-PS80,443,21,22", "-PA3389,8080", target
+                ],
+                "port_scan": [
+                    "nmap", "-sS", "-T4", "-p-", "--min-rate", "500", target
+                ],
+                "service_scan": [
+                    "nmap", "-sS", "-T4", "-A", "-p-", "--version-intensity", "5", "--min-rate", "500", target
+                ],
             }
             if scan_type not in scan_commands:
                 return {"error": "Invalid scan type"}
@@ -213,7 +219,6 @@ def main():
                         render_port_tags(port_table)
                         st.markdown("#### Port Table")
                         st.markdown(render_port_table(port_table), unsafe_allow_html=True)
-                        # vuln_links(port_table)  # <- REMOVED AS REQUESTED
                         # Expandable details
                         for port, state, service, info in port_table:
                             if details.get(port):
