@@ -7,10 +7,11 @@ import os
 import tempfile
 from datetime import datetime
 import yara
+import pyperclip
 
 st.set_page_config(page_title="CyberSec Assistant", page_icon="🛡️", layout="wide")
 
-# --- Core Functions (as before, unchanged) ---
+# --- Core Functions ---
 
 def parse_ports(output):
     port_table, details = [], {}
@@ -32,20 +33,24 @@ def parse_ports(output):
             if current_port in details: details[current_port].append(line.strip())
     return port_table, details
 
-def advanced_port_tags(port_table):
+def service_icon(service):
     icons = {
-        "http": "🌐", "https": "🔒", "ssh": "🔑", "ftp": "📁", "rdp": "🖥️", "smtp": "✉️", "dns": "🌎"
+        "http": "🌐", "https": "🔒", "ssh": "🔑", "ftp": "📁", "rdp": "🖥️",
+        "smtp": "✉️", "dns": "🌎", "mysql": "🗄️", "postgresql": "🗄️", "smb": "🧩"
     }
-    open_ports = [f"{icons.get(p[2],'🟢')} {p[0]} ({p[2]})" for p in port_table if p[1] == "open"]
+    return icons.get(service, "🟢")
+
+def advanced_port_tags(port_table):
+    open_ports = [
+        f"{service_icon(p[2])} <b>{p[0]}</b> <small>({p[2]})</small>"
+        for p in port_table if p[1] == "open"
+    ]
     if open_ports:
         tag_html = " ".join([
             f"<span style='background:#16a34a;color:#fff;border-radius:7px;padding:3px 10px;margin:2px 6px 2px 0;font-size:1rem;'>{p}</span>"
             for p in open_ports
         ])
-        st.markdown(
-            f"<b>{len(open_ports)} open ports:</b> {tag_html}",
-            unsafe_allow_html=True
-        )
+        st.markdown(f"<b>{len(open_ports)} open ports:</b> {tag_html}", unsafe_allow_html=True)
 
 def render_port_table(port_table):
     if not port_table: return "No open ports detected."
@@ -59,6 +64,14 @@ def export_report(text, filename):
     tmp_path = os.path.join(tempfile.gettempdir(), filename)
     with open(tmp_path, "w", encoding="utf-8") as f: f.write(text)
     with open(tmp_path, "rb") as f: st.download_button(f"⬇️ Download {filename}", f, file_name=filename, mime="text/plain")
+
+def rate_risk(port_table):
+    critical = {"22/": "SSH", "3389/": "RDP", "3306/": "MySQL", "5432/": "PostgreSQL", "445/": "SMB"}
+    found = [p for p in port_table if any(p[0].startswith(x) for x in critical.keys())]
+    if found: return ("High", "🔴", "Critical management or DB ports open: " + ", ".join(f"{p[0]} {p[2]}" for p in found))
+    elif len([p for p in port_table if p[1] == "open"]) > 3: return ("Medium", "🟠", "Multiple ports/services are open")
+    elif port_table: return ("Low", "🟢", "Minimal risk. Only common ports open")
+    else: return ("None", "🟢", "No open ports detected")
 
 class EthicalHackingBot:
     def __init__(self): self.genai_client = None
@@ -130,7 +143,7 @@ NEVER assist with illegal use. Use technical terms and always give real actionab
 # --- UI ---
 
 def main():
-    st.markdown("<h1>🛡️ CyberSec Assistant <span style='font-size:1rem;font-weight:400'>Advanced Nmap & YARA</span></h1>", unsafe_allow_html=True)
+    st.markdown("<h1>🛡️ CyberSec Assistant</h1>", unsafe_allow_html=True)
     st.markdown("""
     <div style="background:#1e293b;padding:10px 18px;border-radius:10px;color:#eee;margin-bottom:14px;font-size:1rem">
     <b>⚠️ Strictly Ethical Use</b><br>
@@ -147,7 +160,6 @@ def main():
         if gemini_key and not st.session_state.bot.genai_client:
             if st.session_state.bot.initialize_gemini(gemini_key):
                 st.success("Gemini API initialized!")
-
         st.divider()
         target = st.text_input("Target (IP or Domain)", placeholder="192.168.1.1 / example.com", key="target")
         scan_type = st.radio("Scan Type", [
@@ -158,12 +170,11 @@ def main():
                 result = st.session_state.bot.run_nmap_scan(target, scan_type)
                 st.session_state.last_scan = result
 
-    # ---- Only call tabs once! ----
     tabs = st.tabs(["📊 Scan Dashboard", "📝 YARA & File Analysis", "💬 AI Security Chat"])
 
     # --- Dashboard Tab ---
     with tabs[0]:
-        st.subheader("Nmap Results & AI Analytics")
+        st.subheader("Scan Results & Security Dashboard")
         result = st.session_state.get("last_scan")
         if not result:
             st.info("Run a scan to see results.")
@@ -184,6 +195,9 @@ def main():
                         st.info(output)
                 else:
                     port_table, details = parse_ports(output)
+                    risk, color, note = rate_risk(port_table)
+                    st.markdown(f"<div style='font-size:1.2rem;margin-bottom:7px'>Security Priority: <b>{color} {risk}</b></div>", unsafe_allow_html=True)
+                    st.info(note)
                     advanced_port_tags(port_table)
                     if port_table:
                         st.markdown(render_port_table(port_table), unsafe_allow_html=True)
@@ -193,16 +207,21 @@ def main():
                                 with st.expander(f"📝 {port} ({service})", expanded=service in ("ssh", "http", "https")):
                                     st.code("\n".join(details[port]), language="text")
                         export_report(output, f"{scan_type}_nmap_report.txt")
+                        portlist = ", ".join([f"{p[0]} ({p[2]})" for p in port_table if p[1] == "open"])
+                        if st.button("📋 Copy Open Ports/Services to Clipboard", key="copyports"):
+                            pyperclip.copy(portlist)
+                            st.toast("Port/service list copied!", icon="📋")
                     else:
                         st.warning("No open ports detected.")
                     st.markdown("---")
-                    if st.button("🔍 AI Security Context", key="ai_context"):
+                    if st.button("🔍 AI Security Analysis", key="ai_context"):
                         ai = st.session_state.bot.get_ai_response(
                             "Give an actionable security summary of these Nmap scan results. Focus on open ports, their risks, and suggested next actions. Explain in clear language for a technical team.",
                             output
                         )
-                        st.markdown(ai)
-                        export_report(ai, "gemini_ai_security_summary.txt")
+                        with st.expander("Gemini AI Security Analysis", expanded=True):
+                            st.markdown(ai)
+                            export_report(ai, "gemini_ai_security_summary.txt")
                 with st.expander("Raw Nmap Output"):
                     st.code(output, language="text")
 
@@ -319,7 +338,7 @@ def main():
                     st.session_state.messages.append({"role": "assistant", "content": response})
 
     st.markdown("---")
-    st.markdown("<div style='text-align:center;color:#8b8b8b;font-size:0.95rem'>🛡️ CyberSec Assistant – Advanced Nmap & YARA<br>Always work with permission.</div>", unsafe_allow_html=True)
+    st.markdown("<div style='text-align:center;color:#8b8b8b;font-size:0.95rem'>🛡️ CyberSec Assistant<br>Always work with permission.</div>", unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
