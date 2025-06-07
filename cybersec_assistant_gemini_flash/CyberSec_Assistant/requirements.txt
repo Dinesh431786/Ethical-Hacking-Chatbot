@@ -5,4 +5,4 @@ yara-python
 requests
 scapy
 ftplib
-impacket
+
