@@ -19,15 +19,12 @@ except ImportError:
 
 st.set_page_config(page_title="CyberSec Assistant", page_icon="🛡️", layout="wide")
 
-# --- Port Parsing and Display Functions ---
-
 def parse_ports(output):
     port_table = []
     details = {}
     in_table = False
     lines = output.splitlines()
     current_port = None
-
     for line in lines:
         if line.strip().startswith("PORT "):
             in_table = True
@@ -71,8 +68,6 @@ def render_port_tags(port_table):
             unsafe_allow_html=True
         )
 
-# --- Gemini & YARA Core Class ---
-
 class EthicalHackingBot:
     def __init__(self):
         self.genai_client = None
@@ -104,13 +99,19 @@ class EthicalHackingBot:
                     "--script=default,banner,http-headers,http-server-header,ssl-enum-ciphers,smb-os-discovery,smb-enum-sessions,ftp-anon", target
                 ],
             }
-            if evasion and scan_type in ["port_scan", "service_scan"]:
-                scan_commands[scan_type][1:1] = ["-f", "--data-length", "50", "--source-port", "53", "--badsum"]
             if scan_type not in scan_commands:
                 return {"error": "Invalid scan type"}
-            result = subprocess.run(scan_commands[scan_type], capture_output=True, text=True, timeout=180)
+
+            # Always use a fresh command list
+            cmd = list(scan_commands[scan_type])
+            if evasion and scan_type in ["port_scan", "service_scan"]:
+                cmd[1:1] = ["-f", "--data-length", "50", "--source-port", "53", "--badsum"]
+
+            st.write("DEBUG Nmap Command:", cmd)  # REMOVE or comment out after debugging
+
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
             return {
-                "command": " ".join(scan_commands[scan_type]),
+                "command": " ".join(cmd),
                 "stdout": result.stdout,
                 "stderr": result.stderr,
                 "returncode": result.returncode,
@@ -288,7 +289,6 @@ def main():
         "🛡️ Vuln Checks", "🔑 Brute-Force", "📝 YARA Rules"
     ])
 
-    # --- Tab 2: Scan Results ---
     with tab2:
         st.header("Scan Results")
         if 'last_scan' in st.session_state:
